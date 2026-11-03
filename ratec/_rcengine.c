@@ -46,76 +46,126 @@ static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
                                   4294967295ull, 1099511627775ull};
 #define ALPHA 0.2
 #define GOLDEN 0x9E3779B97F4A7C15ull
-#define WIN 8                   /* inline occurrence window             */
-#define IMAX 255                /* max inline total (u8 counts)         */
+#define WIN 16                  /* inline occurrence window (u16 counts) */
+#define IMAX 65535              /* max inline total (u16 window counts) */
 #define PROMOTED 0xFF           /* distinct marker: count map is author */
-#define RC_VERSION "0.1.0"
+#define RC_VERSION "0.2.0"
 #define PF_DEFAULT 2
 #define MAP_CAPBITS_DEFAULT 22
 #define ID_NONE 0xFFFFFFFFu
 
 /* ------------------------------------------------------------------ map */
+/* Both slot types share the {u64 key; u32 tot;} prefix: tot==0 marks an
+ * empty slot, so one generic probe serves both. The tmap slot keeps an
+ * inline occurrence window with u16 counts (contexts stay single-probe
+ * until 65535 total visits); the cmap slot is a bare 16 B counter
+ * (contexts promoted out of their window). */
 typedef struct {
     uint64_t key;                /* tmap: (order<<48)|ctx ; cmap: ctx<<8|b */
     uint32_t tot;
     uint8_t  distinct;           /* tmap: inline entries used / PROMOTED   */
     uint8_t  b[WIN];
-    uint8_t  c[WIN];
-    uint8_t  pad[3];
-} Ent;                           /* 32 bytes */
-typedef struct { Ent *e; uint64_t capbits, mask, n; } Map;
+    uint16_t c[WIN];             /* window counts (<= tot <= 65535)        */
+    uint8_t  pad[2];   /* 8+4+1+16+32+2 = 64 */
+} Ent;                           /* exactly 64 bytes = one cache line      */
+_Static_assert(sizeof(Ent) == 64, "Ent must be one cache line");
+typedef struct {
+    uint64_t key;                /* ctx<<8|b                               */
+    uint32_t tot;
+    uint32_t pad;
+} CEnt;                          /* 16 bytes, {key,tot} prefix             */
+typedef struct {
+    void *e; uint64_t capbits, mask, n; uint32_t esize;
+    uint64_t *dirty;             /* page-granular touched bitmap (reset)  */
+    int page_shift;              /* log2(slots per 4 KiB page)            */
+} Map;
 
-static int map_alloc(Map *m, uint64_t capbits) {
+static int map_alloc(Map *m, uint64_t capbits, uint32_t esize) {
     if (capbits < 4) capbits = 4;
     if (capbits > 26) capbits = 26;
     m->capbits = capbits; m->mask = (1ull << capbits) - 1; m->n = 0;
-    m->e = (Ent *)calloc(1ull << capbits, sizeof(Ent));
-    return m->e ? 0 : -1;
+    m->esize = esize;
+    int ps = 0;                   /* log2(slots per 4 KiB page) */
+    while ((1u << ps) < 4096u / esize) ps++;
+    m->page_shift = ps;
+    m->dirty = (uint64_t *)calloc(((1ull << capbits) >> ps) + 64, 8);
+    m->e = calloc(1ull << capbits, esize);
+    return (m->e && m->dirty) ? 0 : -1;
 }
-static int map_grow(Map *m) {
-    Map t; uint64_t cap = 1ull << m->capbits;
-    if (map_alloc(&t, m->capbits + 1) < 0) return -1;
-    for (uint64_t i = 0; i < cap; i++) {
-        if (m->e[i].tot) {
-            uint64_t j = (m->e[i].key * GOLDEN) >> (64 - t.capbits);
-            while (t.e[j].tot) j = (j + 1) & t.mask;
-            t.e[j] = m->e[i]; t.n++;
-        }
-    }
-    free(m->e); *m = t; return 0;
-}
-/* grow (rehashing, contents preserved) straight to a target size */
-static int map_grow_to(Map *m, uint64_t capbits) {
-    if (capbits <= m->capbits) return 0;
-    if (capbits > 26) capbits = 26;
-    Map t;
-    if (map_alloc(&t, capbits) < 0) return -1;
-    uint64_t cap = 1ull << m->capbits;
-    for (uint64_t i = 0; i < cap; i++) {
-        if (m->e[i].tot) {
-            uint64_t j = (m->e[i].key * GOLDEN) >> (64 - t.capbits);
-            while (t.e[j].tot) j = (j + 1) & t.mask;
-            t.e[j] = m->e[i]; t.n++;
-        }
-    }
-    free(m->e); *m = t; return 0;
-}
-/* core_reserve lives with the core below (needs the full RcCore type) */
-
 /* find-or-create; never grows (growth is checked once per byte, after all
  * slot pointers for that byte are done) */
-static inline Ent *fos(Map *m, uint64_t key) {
+static inline void *fos(Map *m, uint64_t key) {
     uint64_t i = (key * GOLDEN) >> (64 - m->capbits);
     for (;;) {
-        Ent *e = &m->e[i];
-        if (e->tot == 0) { e->key = key; m->n++; return e; }
-        if (e->key == key) return e;
+        uint8_t *base = (uint8_t *)m->e + i * m->esize;
+        uint32_t tot = *(const uint32_t *)(base + 8);
+        if (tot == 0) {
+            *(uint64_t *)base = key; m->n++;
+            {   /* mark the slot's page dirty: bitmap bit = page index */
+                const uint64_t pgidx = i >> m->page_shift;
+                m->dirty[pgidx >> 6] |= 1ull << (pgidx & 63);
+            }
+            return base;
+        }
+        if (*(const uint64_t *)base == key) return base;
         i = (i + 1) & m->mask;
     }
 }
+/* rehash all occupied slots into a table of capbits (contents preserved);
+ * generic over the slot size, streams source lines through prefetch */
+static int map_rehash_to(Map *m, uint64_t capbits) {
+    if (capbits <= m->capbits) return 0;
+    if (capbits > 26) capbits = 26;
+    Map t;
+    if (map_alloc(&t, capbits, m->esize) < 0) return -1;
+    uint64_t cap = 1ull << m->capbits;
+    const uint8_t *sb0 = (const uint8_t *)m->e;
+    const uint32_t es = m->esize;
+    for (uint64_t i = 0; i < cap; i++) {
+        const uint8_t *sb = sb0 + i * es;
+        if (*(const uint32_t *)(sb + 8)) {
+            const uint64_t key = *(const uint64_t *)sb;
+            uint64_t j = (key * GOLDEN) >> (64 - t.capbits);
+            for (;;) {
+                uint8_t *db = (uint8_t *)t.e + j * t.esize;
+                if (*(uint32_t *)(db + 8) == 0) {
+                    memcpy(db, sb, es);
+                    t.n++;
+                    {   const uint64_t pgidx = j >> t.page_shift;
+                        t.dirty[pgidx >> 6] |= 1ull << (pgidx & 63); }
+                    break;
+                }
+                if (*(const uint64_t *)db == key) break;
+                j = (j + 1) & t.mask;
+            }
+        }
+        if ((i & 63) == 0) __builtin_prefetch(sb + 64 * es, 0, 0);
+    }
+    free(m->e); free(m->dirty); *m = t; return 0;
+}
+static int map_grow(Map *m) { return map_rehash_to(m, m->capbits + 1); }
+static int map_grow_to(Map *m, uint64_t capbits) { return map_rehash_to(m, capbits); }
+
+/* find first window index q < distinct with e->b[q] == b (SWAR over the
+ * two window halves, identical result to the scalar first-match loop) */
 static inline int win_scan(const Ent *e, int distinct, uint8_t b) {
-    for (int q = 0; q < distinct; q++) if (e->b[q] == b) return q;
-    return -1;
+    uint64_t w0, w1;
+    memcpy(&w0, e->b, 8);
+    memcpy(&w1, e->b + 8, 8);
+    const uint64_t x = 0x0101010101010101ull * (uint64_t)b;
+    uint64_t m0 = (w0 ^ x);
+    m0 = (m0 - 0x0101010101010101ull) & ~m0 & 0x8080808080808080ull;
+    const int lo = distinct > 8 ? 8 : distinct;
+    uint64_t vlo = (lo == 8) ? ~0ull : ((1ull << (8 * lo)) - 1ull);
+    m0 &= vlo;
+    if (m0) return (int)(__builtin_ctzll(m0) >> 3);
+    if (distinct <= 8) return -1;
+    uint64_t m1 = (w1 ^ x);
+    m1 = (m1 - 0x0101010101010101ull) & ~m1 & 0x8080808080808080ull;
+    const int hi = distinct - 8;                 /* 1..8 */
+    uint64_t vhi = (hi == 8) ? ~0ull : ((1ull << (8 * hi)) - 1ull);
+    m1 &= vhi;
+    return m1 ? 8 + (int)(__builtin_ctzll(m1) >> 3) : -1;
 }
 
 /* --------------------------------------------------------------- OutVec */
@@ -245,6 +295,7 @@ typedef struct {
     int C;                       /* patch budget, bits (1..64)            */
     int store_book;
     int pf;                      /* prefetch depth 0..4                   */
+    int fast;                    /* non-exact fast lane (poly log2, tree) */
     int poisoned;                /* OOM mid-stream: state invalid         */
 
     /* judge state */
@@ -273,23 +324,24 @@ typedef struct {
 } RcCore;
 
 static RcCore *core_new(int C, int store_book, int pf, int prebits,
-                        int map_capbits);
+                        int map_capbits, int fast);
 static void core_free(RcCore *e);
 
 static RcCore *core_new(int C, int store_book, int pf, int prebits,
-                        int map_capbits) {
+                        int map_capbits, int fast) {
     RcCore *e = (RcCore *)calloc(1, sizeof(RcCore));
     if (!e) return NULL;
     e->C = C; e->store_book = store_book ? 1 : 0;
     e->pf = pf; e->map_capbits = (uint64_t)map_capbits;
+    e->fast = fast ? 1 : 0;
     e->cnt1 = (uint32_t *)calloc(256 * 256, 4);
     e->tot1 = (uint32_t *)calloc(256, 4);
     e->tot2 = (uint32_t *)calloc(65536, 4);
     e->cnt2 = (uint32_t *)calloc(65536ull * 256, 4);   /* zero pages */
     e->dirty2 = (uint64_t *)calloc(1024, 8);
     if (!e->cnt1 || !e->tot1 || !e->tot2 || !e->cnt2 || !e->dirty2) { core_free(e); return NULL; }
-    if (map_alloc(&e->tmap, (uint64_t)prebits) < 0 ||
-        map_alloc(&e->cmap, 10) < 0) { core_free(e); return NULL; }
+    if (map_alloc(&e->tmap, (uint64_t)prebits, sizeof(Ent)) < 0 ||
+        map_alloc(&e->cmap, 10, sizeof(CEnt)) < 0) { core_free(e); return NULL; }
     book_init(&e->book);
     if (e->book.err) { core_free(e); return NULL; }
     return e;
@@ -299,7 +351,9 @@ static void core_free(RcCore *e) {
     if (!e) return;
     free(e->cnt1); free(e->tot1); free(e->tot2); free(e->cnt2);
     free(e->dirty2);
-    free(e->tmap.e); free(e->cmap.e); free(e->obuf);
+    free(e->tmap.e); free(e->tmap.dirty);
+    free(e->cmap.e); free(e->cmap.dirty);
+    free(e->obuf);
     free(e->book.arena); free(e->book.off); free(e->book.ln);
     free(e->book.hk); free(e->book.hv);
     free(e);
@@ -325,9 +379,24 @@ static void core_reset_keep(RcCore *e) {
         e->dirty2[w] = 0;
     }
     memset(e->h, 0, sizeof e->h);
-    /* maps: clear tot of occupied slots (scan; keeps capacity) */
-    for (uint64_t s = 0; s < (1ull << e->tmap.capbits); s++) e->tmap.e[s].tot = 0;
-    for (uint64_t s = 0; s < (1ull << e->cmap.capbits); s++) e->cmap.e[s].tot = 0;
+    /* maps: clear only the pages a previous run actually touched (keeps all
+     * capacity and pages mapped; cost is proportional to touched pages) */
+    for (int which = 0; which < 2; which++) {
+        Map *m = which ? &e->cmap : &e->tmap;
+        const uint64_t npg = (1ull << m->capbits) >> m->page_shift;
+        const size_t pg = 4096;   /* by construction: esize << page_shift */
+        for (uint64_t w = 0; w < (npg >> 6) + 1; w++) {
+            uint64_t word = m->dirty[w];
+            if (!word) continue;
+            while (word) {
+                const int bit = __builtin_ctzll(word);
+                word &= word - 1;
+                const uint64_t p = (w << 6) | (uint64_t)bit;
+                memset((uint8_t *)m->e + p * pg, 0, pg);
+            }
+            m->dirty[w] = 0;
+        }
+    }
     e->tmap.n = 0; e->cmap.n = 0;
     e->patch_open = 0; e->open_start = 0; e->open_len = 0;
     e->cs = 0.0; e->lim = 0.0;
@@ -345,40 +414,76 @@ static int core_reserve(RcCore *e, size_t n) {
     uint64_t bits = 8;
     while ((1ull << bits) < want && bits < e->map_capbits) bits++;
     if (bits > e->tmap.capbits && map_grow_to(&e->tmap, bits) < 0) return -1;
+    if (bits > e->cmap.capbits && map_grow_to(&e->cmap, bits) < 0) return -1;
     return 0;
 }
 
 /* one order-3..5 context: prediction + state update, interleaved.
  * cold -> 1 probe; window hit/new -> 1 probe; promoted -> 2 probes. */
+#define DO_ORDER_PM(OI, LN) \
+    if (FST) pm##LN = term; else pm += term;
 #define DO_ORDER(OI) do { \
     const uint64_t ok_ = ((uint64_t)(OI) << 48) | h[(OI)]; \
-    Ent *te = fos(&tl, ok_); \
+    Ent *te = (Ent *)fos(&tl, ok_); \
     const uint32_t t_ = te->tot; \
     if (t_ == 0) { \
-        pm += W[(OI)] * 0.00390625; \
+        term = W[(OI)] * 0.00390625; DO_ORDER_PM(OI, OI) \
         te->tot = 1; te->distinct = 1; te->b[0] = b; te->c[0] = 1; \
     } else if (te->distinct != PROMOTED) { \
         const int j = win_scan(te, te->distinct, b); \
         const uint32_t e_ = j >= 0 ? te->c[j] : 0; \
         term = W[(OI)] * ((double)e_ + ALPHA); term = term * inv; \
-        pm += term / (1.0 + (double)t_ * inv); \
+        term = term / (1.0 + (double)t_ * inv); DO_ORDER_PM(OI, OI) \
         if (t_ == IMAX || (j < 0 && te->distinct == WIN)) { \
             for (int q = 0; q < te->distinct; q++) \
-                fos(&tc, (ok_ << 8) | te->b[q])->tot = te->c[q]; \
-            fos(&tc, (ok_ << 8) | b)->tot += 1; \
+                ((CEnt *)fos(&tc, (ok_ << 8) | te->b[q]))->tot = te->c[q]; \
+            ((CEnt *)fos(&tc, (ok_ << 8) | b))->tot += 1; \
             te->tot = t_ + 1; te->distinct = PROMOTED; \
         } else if (j >= 0) { te->c[j]++; te->tot = t_ + 1; } \
         else { te->b[te->distinct] = b; te->c[te->distinct] = 1; \
                te->distinct++; te->tot = t_ + 1; } \
     } else { \
-        Ent *ce = fos(&tc, (ok_ << 8) | b); \
+        CEnt *ce = (CEnt *)fos(&tc, (ok_ << 8) | b); \
         term = W[(OI)] * ((double)ce->tot + ALPHA); term = term * inv; \
-        pm += term / (1.0 + (double)t_ * inv); \
+        term = term / (1.0 + (double)t_ * inv); DO_ORDER_PM(OI, OI) \
         ce->tot++; \
         te->tot = t_ + 1; \
     } \
     h[(OI)] = ((h[(OI)] << 8) | b) & MASK[(OI)]; \
 } while (0)
+
+/* ------------------------------------------------ fast (non-exact) lane */
+/* Degree-11 minimax-squares fit of log2 on m in [1,2): max |err| 5.7e-10
+ * (float32 has ~6e-8). Two parallel chains keep the dependency depth ~8.
+ * Used only when the engine is constructed with exact=0; surprisal then
+ * deviates from the reference in the last ulps and occasional patch cuts
+ * shift by one byte (documented; decode/round-trip unaffected). */
+static const double RC_L2C[12] = {
+    5.73139908829234266e-10, 1.44269494840484547e+00, -7.21343815080402129e-01,
+    4.80833472318683619e-01, -3.60052287674538118e-01, 2.84872026466189754e-01,
+    -2.26131929175595547e-01, 1.67279251685971603e-01, -1.04398212983452532e-01,
+    4.88131318920478827e-02, -1.46256425177586705e-02, 2.05905650043528227e-03
+};
+static inline float rc_log2_fast(double x) {
+    union { double d; uint64_t i; } u;
+    u.d = x;
+    int e = (int)(u.i >> 52) - 1023;
+    u.i = (u.i & 0x000FFFFFFFFFFFFFULL) | 0x3FF0000000000000ULL;
+    const double y = u.d - 1.0;
+    const double z = y * y;
+    /* explicit FMA chains (fast lane only; exact lane never calls this) */
+    double E = fma(z, RC_L2C[10], RC_L2C[8]);
+    E = fma(z, E, RC_L2C[6]);
+    E = fma(z, E, RC_L2C[4]);
+    E = fma(z, E, RC_L2C[2]);
+    E = fma(z, E, RC_L2C[0]);
+    double O = fma(z, RC_L2C[11], RC_L2C[9]);
+    O = fma(z, O, RC_L2C[7]);
+    O = fma(z, O, RC_L2C[5]);
+    O = fma(z, O, RC_L2C[3]);
+    O = fma(z, O, RC_L2C[1]);
+    return (float)-((double)e + fma(y, O, E));   /* sur = -log2(x) */
+}
 
 /* emit one closed patch (start,end,id). ove/ovi may be NULL. */
 #define EMIT(ST, EN, CT, CL) do { \
@@ -410,6 +515,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
     const int sbook = e->store_book;
     uint64_t pos0 = e->nseen;
     const int Cloc = e->C;                 /* hoisted: no per-byte reloads */
+    const int FST = e->fast;
     const uint64_t mapcap = e->map_capbits;
     long frc = 0; size_t npatch = 0;
     int rc = 0;
@@ -419,7 +525,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
 
     while (i < n) {
         const uint8_t b = buf[i];
-        double pm = 0.0;
+        double pm = 0.0, pm0 = 0.0, pm1 = 0.0, pm2 = 0.0, pm3 = 0.0, pm4 = 0.0, pm5 = 0.0;
 
         /* order 0: global context, total = bytes seen so far */
         {
@@ -427,8 +533,9 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
             const uint32_t c0 = cnt0[b];
             if (tot) {
                 term = W[0] * ((double)c0 + ALPHA); term = term * inv;
-                pm += term / (1.0 + (double)tot * inv);
-            } else pm += W[0] * 0.00390625;
+                term = term / (1.0 + (double)tot * inv);
+            } else term = W[0] * 0.00390625;
+            if (FST) pm0 = term; else pm += term;
             cnt0[b] = c0 + 1;
         }
         /* order 1: direct arrays */
@@ -437,8 +544,9 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
             const uint32_t c1v = t1v ? cnt1[(h[1] << 8) | b] : 0;
             if (t1v) {
                 term = W[1] * ((double)c1v + ALPHA); term = term * inv;
-                pm += term / (1.0 + (double)t1v * inv);
-            } else pm += W[1] * 0.00390625;
+                term = term / (1.0 + (double)t1v * inv);
+            } else term = W[1] * 0.00390625;
+            if (FST) pm1 = term; else pm += term;
             tot1[h[1]] = t1v + 1;
             cnt1[(h[1] << 8) | b] = c1v + 1;
             h[1] = ((h[1] << 8) | b) & MASK[1];
@@ -449,8 +557,9 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
             const uint32_t c2v = t2v ? cnt2[((uint64_t)h[2] << 8) | b] : 0;
             if (t2v) {
                 term = W[2] * ((double)c2v + ALPHA); term = term * inv;
-                pm += term / (1.0 + (double)t2v * inv);
-            } else pm += W[2] * 0.00390625;
+                term = term / (1.0 + (double)t2v * inv);
+            } else term = W[2] * 0.00390625;
+            if (FST) pm2 = term; else pm += term;
             tot2[h[2]] = t2v + 1;
             cnt2[((uint64_t)h[2] << 8) | b] = c2v + 1;
             dirty2[h[2] >> 6] |= 1ull << (h[2] & 63);
@@ -466,7 +575,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     for (int q = 0; q < p; q++)
                         hc = ((hc << 8) | buf[i + q]) & MASK[oi];
                     const uint64_t nok = ((uint64_t)oi << 48) | hc;
-                    __builtin_prefetch(&tl.e[(nok * GOLDEN) >> (64 - tl.capbits)], 1, 3);
+                    __builtin_prefetch((uint8_t *)tl.e + (((nok * GOLDEN) >> (64 - tl.capbits))) * tl.esize, 1, 3);
                 }
             }
         }
@@ -474,7 +583,16 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
         /* orders 3-5 */
         DO_ORDER(3); DO_ORDER(4); DO_ORDER(5);
 
-        const float sf = (float)(pm > 0.0 ? -log2(pm) : 64.0);
+        float sf;
+        if (FST) {
+            /* relaxed lane: terms live in pm0..pm5; two 3-term partial
+             * sums (rounding order is free here) shorten the serial tail */
+            const double t03 = pm0 + pm1 + pm2, t45 = pm3 + pm4 + pm5;
+            const double pmt = t03 + t45;
+            sf = pmt > 0.0 ? rc_log2_fast(pmt) : 64.0f;
+        } else {
+            sf = pm > 0.0 ? (float)(-log2(pm)) : 64.0f;
+        }
         if (sur_out) sur_out[i] = sf;
 
         if (!want_patches) {
@@ -605,20 +723,22 @@ static int patch_from_sur_core(const float *sur, size_t n, int C, OutVec *ov) {
 #define RCST_VERSION 1u
 
 static int save_core(RcCore *e, GrowBuf *g) {
-    uint32_t magic = RCST_MAGIC, ver = RCST_VERSION;
+    uint32_t magic = RCST_MAGIC, ver = 4;
     uint32_t C32 = (uint32_t)e->C;
     uint32_t sb = (uint32_t)e->store_book, pf = (uint32_t)e->pf;
+    uint32_t fz = (uint32_t)e->fast;
     uint32_t poisoned = 0;
     if (gb_u32(g, &magic) || gb_u32(g, &ver) || gb_u32(g, &C32) ||
-        gb_u32(g, &sb) || gb_u32(g, &pf) || gb_u32(g, &poisoned)) return -1;
+        gb_u32(g, &sb) || gb_u32(g, &pf) || gb_u32(g, &fz) ||
+        gb_u32(g, &poisoned)) return -1;
     if (gb_u64(g, &e->nseen) || gb_u64(g, &e->n_forced) ||
         gb_u64(g, &e->n_patches)) return -1;
     /* patcher state */
     uint8_t po = (uint8_t)e->patch_open;
     if (gb_u8(g, &po) || gb_u64(g, &e->open_start) || gb_u64(g, &e->open_len) ||
         gb_f64(g, &e->cs) || gb_f64(g, &e->lim)) return -1;
-    if (e->patch_open && e->open_len &&
-        gb_put(g, e->obuf, (size_t)e->open_len)) return -1;
+    if (e->store_book && e->patch_open && e->open_len &&
+        gb_put(g, e->obuf, (size_t)e->open_len)) return -1;   /* obuf only in book mode */
     /* judge direct tables */
     if (gb_put(g, e->cnt0, sizeof e->cnt0)) return -1;
     if (gb_put(g, e->cnt1, 256 * 256 * 4) || gb_put(g, e->tot1, 256 * 4) ||
@@ -647,15 +767,15 @@ static int save_core(RcCore *e, GrowBuf *g) {
     /* maps */
     if (gb_u64(g, &e->tmap.capbits) || gb_u64(g, &e->tmap.n)) return -1;
     for (uint64_t s = 0; s < (1ull << e->tmap.capbits); s++) {
-        const Ent *en = &e->tmap.e[s];
+        const Ent *en = (const Ent *)((const uint8_t *)e->tmap.e + s * e->tmap.esize);
         if (!en->tot) continue;
         if (gb_put(g, &en->key, 8) || gb_put(g, &en->tot, 4) ||
             gb_put(g, &en->distinct, 1) ||
-            gb_put(g, en->b, WIN) || gb_put(g, en->c, WIN)) return -1;
+            gb_put(g, en->b, WIN) || gb_put(g, en->c, WIN * 2)) return -1;
     }
     if (gb_u64(g, &e->cmap.capbits) || gb_u64(g, &e->cmap.n)) return -1;
     for (uint64_t s = 0; s < (1ull << e->cmap.capbits); s++) {
-        const Ent *en = &e->cmap.e[s];
+        const CEnt *en = (const CEnt *)((const uint8_t *)e->cmap.e + s * e->cmap.esize);
         if (!en->tot) continue;
         if (gb_put(g, &en->key, 8) || gb_put(g, &en->tot, 4)) return -1;
     }
@@ -672,12 +792,15 @@ static int save_core(RcCore *e, GrowBuf *g) {
 
 static RcCore *load_core(const uint8_t *p, size_t n) {
     RdBuf r = { p, n, 0, 0 };
-    uint32_t magic = 0, ver = 0, C = 0, sb = 0, pf = 0, poisoned = 0;
+    uint32_t magic = 0, ver = 0, C = 0, sb = 0, pf = 0, fz = 0, poisoned = 0;
     if (rd_u32(&r, &magic) || rd_u32(&r, &ver) ||
-        rd_u32(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
-        rd_u32(&r, &poisoned)) return NULL;
-    if (magic != RCST_MAGIC || ver != RCST_VERSION) return NULL;
-    RcCore *e = core_new((int)C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT);
+        rd_u32(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf)) return NULL;
+    if (ver >= 4) {
+        if (rd_u32(&r, &fz)) return NULL;
+    }
+    if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
+    if (magic != RCST_MAGIC || ver < 2 || ver > 4) return NULL;
+    RcCore *e = core_new((int)C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT, (int)fz);
     if (!e) return NULL;
     if (rd_u64(&r, &e->nseen) || rd_u64(&r, &e->n_forced) ||
         rd_u64(&r, &e->n_patches)) goto fail;
@@ -686,7 +809,7 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         rd_u64(&r, &e->open_len) || rd_f64(&r, &e->cs) || rd_f64(&r, &e->lim))
         goto fail;
     e->patch_open = po;
-    if (e->patch_open && e->open_len) {
+    if (e->store_book && e->patch_open && e->open_len) {
         if (e->open_len > (1ull << 32)) goto fail;
         uint8_t *ob = (uint8_t *)malloc((size_t)e->open_len);
         if (!ob) goto fail;
@@ -711,30 +834,47 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
             row[nz[q]] = v;
         }
     }
+    /* rebuild the order-2 dirty bitmap from the restored cnt2 rows (the
+     * snapshot does not carry it; without this a reset() after load()
+     * would leave stale cnt2 rows and corrupt the next engine reuse) */
+    memset(e->dirty2, 0, 1024 * 8);
+    for (uint64_t c = 0; c < 65536; c++) {
+        const uint32_t *row = e->cnt2 + (c << 8);
+        for (int k = 0; k < 256; k++)
+            if (row[k]) { e->dirty2[c >> 6] |= 1ull << (c & 63); break; }
+    }
     uint64_t capb = 0, cnt = 0;
     if (rd_u64(&r, &capb) || rd_u64(&r, &cnt)) goto fail;
     if (capb > 26) goto fail;
     free(e->tmap.e);
-    if (map_alloc(&e->tmap, capb) < 0) goto fail;
+    if (map_alloc(&e->tmap, capb, sizeof(Ent)) < 0) goto fail;
     for (uint64_t k = 0; k < cnt; k++) {
         Ent en; memset(&en, 0, sizeof en);
         if (rd_get(&r, &en.key, 8) || rd_get(&r, &en.tot, 4) ||
             rd_get(&r, &en.distinct, 1) ||
-            rd_get(&r, en.b, WIN) || rd_get(&r, en.c, WIN)) goto fail;
+            rd_get(&r, en.b, WIN) || rd_get(&r, en.c, WIN * 2)) goto fail;
         uint64_t j = (en.key * GOLDEN) >> (64 - e->tmap.capbits);
-        while (e->tmap.e[j].tot) j = (j + 1) & e->tmap.mask;
-        e->tmap.e[j] = en; e->tmap.n++;
+        while (((Ent *)((uint8_t *)e->tmap.e + j * e->tmap.esize))->tot)
+            j = (j + 1) & e->tmap.mask;
+        *(Ent *)((uint8_t *)e->tmap.e + j * e->tmap.esize) = en;
+        {   const uint64_t pgidx = j >> e->tmap.page_shift;
+            e->tmap.dirty[pgidx >> 6] |= 1ull << (pgidx & 63); }
+        e->tmap.n++;
     }
     if (rd_u64(&r, &capb) || rd_u64(&r, &cnt)) goto fail;
     if (capb > 26) goto fail;
     free(e->cmap.e);
-    if (map_alloc(&e->cmap, capb) < 0) goto fail;
+    if (map_alloc(&e->cmap, capb, sizeof(CEnt)) < 0) goto fail;
     for (uint64_t k = 0; k < cnt; k++) {
-        Ent en; memset(&en, 0, sizeof en);
+        CEnt en; memset(&en, 0, sizeof en);
         if (rd_get(&r, &en.key, 8) || rd_get(&r, &en.tot, 4)) goto fail;
         uint64_t j = (en.key * GOLDEN) >> (64 - e->cmap.capbits);
-        while (e->cmap.e[j].tot) j = (j + 1) & e->cmap.mask;
-        e->cmap.e[j] = en; e->cmap.n++;
+        while (((CEnt *)((uint8_t *)e->cmap.e + j * e->cmap.esize))->tot)
+            j = (j + 1) & e->cmap.mask;
+        *(CEnt *)((uint8_t *)e->cmap.e + j * e->cmap.esize) = en;
+        {   const uint64_t pgidx = j >> e->cmap.page_shift;
+            e->cmap.dirty[pgidx >> 6] |= 1ull << (pgidx & 63); }
+        e->cmap.n++;
     }
     if (e->store_book) {
         uint64_t bn = 0, alen = 0;
@@ -822,12 +962,14 @@ static void Engine_dealloc(EngineObj *self) {
 static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     int C = 20, store_book = 1, pf = -1, prebits = 16;
     int map_capbits = MAP_CAPBITS_DEFAULT;
+    int fast = 0;
     static char *kwlist[] = {"c", "store_book", "pf", "prebits",
-                             "map_capbits", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ipiii", kwlist,
+                             "map_capbits", "exact", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ipiiii", kwlist,
                                      &C, &store_book, &pf, &prebits,
-                                     &map_capbits))
+                                     &map_capbits, &fast))
         return NULL;
+    fast = fast ? 0 : 1;   /* kwarg is `exact` (default true); fast = !exact */
     if (C < 1 || C > 64) {
         PyErr_SetString(PyExc_ValueError, "c must be in 1..64"); return NULL;
     }
@@ -842,7 +984,7 @@ static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
     if (!self) return NULL;
     self->busy = 0;
     self->core = core_new(C, store_book, pf < 0 ? PF_DEFAULT : pf,
-                          prebits, map_capbits);
+                          prebits, map_capbits, fast);
     if (!self->core) { Py_DECREF(self); return PyErr_NoMemory(); }
     return (PyObject *)self;
 }
@@ -1114,7 +1256,7 @@ static PyTypeObject Engine_Type = {
 typedef struct {
     const uint8_t *data; size_t n;
     uint32_t *out; size_t nout;
-    int c, prebits, err;
+    int c, prebits, err, fast;
 } BJob;
 typedef struct { BJob *jobs; int njobs; atomic_int next; } BPool;
 
@@ -1125,7 +1267,7 @@ static void *bworker(void *argp) {
         if (idx >= p->njobs) break;
         BJob *j = &p->jobs[idx];
         RcCore *core = core_new(j->c, 0, PF_DEFAULT, j->prebits,
-                                MAP_CAPBITS_DEFAULT);
+                                MAP_CAPBITS_DEFAULT, j->fast);
         if (!core) { j->err = 1; continue; }
         OutVec ov; ov_init(&ov);
         int rc = core_run(core, j->data, j->n, 1, NULL, &ov, NULL, NULL);
@@ -1139,10 +1281,10 @@ static void *bworker(void *argp) {
 
 static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *docs;
-    int c = 20, threads = 0;
-    static char *kwlist[] = {"docs", "c", "threads", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|ii", kwlist,
-                                     &docs, &c, &threads))
+    int c = 20, threads = 0, fz = 0;
+    static char *kwlist[] = {"docs", "c", "threads", "fast", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|iii", kwlist,
+                                     &docs, &c, &threads, &fz))
         return NULL;
     PyObject *fast = PySequence_Fast(docs, "docs must be a sequence");
     if (!fast) return NULL;
@@ -1166,6 +1308,7 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
         jobs[k].data = (const uint8_t *)views[k].buf;
         jobs[k].n = (size_t)views[k].len;
         jobs[k].c = c;
+        jobs[k].fast = fz;
         size_t n = jobs[k].n;
         int bits = 12;
         while ((1ull << bits) < 6 * n && bits < 23) bits++;
@@ -1327,9 +1470,10 @@ int main(int argc, char **argv) {
     fclose(f);
     int C = atoi(argv[2]), pf = atoi(argv[3]), prebits = atoi(argv[4]);
     int reps = atoi(argv[5]);
+    int fastarg = (argc > 6) ? atoi(argv[6]) : 0;
     double inv_dummy = 0; (void)inv_dummy;
     for (int r = -1; r < reps; r++) {
-        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT);
+        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT, fastarg);
         core_reserve(core, (size_t)n);
         OutVec ov; ov_init(&ov);
         struct timespec ts0, ts1;

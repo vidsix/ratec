@@ -1,0 +1,8 @@
+build/
+ratec.egg-info/
+__pycache__/
+*.so
+*.pyd
+dist/
+*.egg-info
+.venv/

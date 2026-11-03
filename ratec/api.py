@@ -56,9 +56,11 @@ class RateC:
     """
 
     def __init__(self, c: int = 20, store_book: bool = True, pf: int = -1,
-                 warm_state=None, prebits: int = 16, map_capbits: int = 22):
+                 warm_state=None, prebits: int = 16, map_capbits: int = 22,
+                 exact: bool = True):
         self._eng = _rc.Engine(c=c, store_book=store_book, pf=pf,
-                               prebits=prebits, map_capbits=map_capbits)
+                               prebits=prebits, map_capbits=map_capbits,
+                               exact=exact)
         if warm_state is not None:
             state = warm_state
             if isinstance(state, (str, bytes, bytearray)) and not isinstance(state, str):
@@ -89,6 +91,65 @@ class RateC:
 
     def decode(self, ids: Sequence[int]) -> str:
         return self._eng.decode_bytes(list(ids)).decode("utf-8")
+
+    # --------------------------------------------------- parallel stream
+    def encode_stream_parallel(self, data, chunk: int = 1 << 20,
+                               threads: int = 0, head_chunks: int = 1):
+        """Encode ONE long stream on many cores by chunking.
+
+        The first `head_chunks` chunks run sequentially (exact judge
+        adaptation); a state snapshot taken after them seeds all parallel
+        workers. Chunks therefore see a judge warmed by the head but not
+        by each other — a documented approximation of sequential
+        `encode_to_spans` (ffmpeg-style), deterministic, spans still tile
+        the input exactly and decode round-trips. For bulk LM data prep
+        on real (multi-core) boxes this is the throughput mode.
+
+        Returns [(start, end, id|None), ...] with absolute offsets.
+        """
+        data = _as_bytes(data)
+        n = len(data)
+        if n <= chunk:
+            return self.encode_to_spans(data)
+        from concurrent.futures import ThreadPoolExecutor
+
+        head = min(max(0, head_chunks), (n + chunk - 1) // chunk - 1)
+        # 1) sequential head on a private engine; it emits its own spans and
+        #    the snapshot (taken after flush) seeds the parallel workers
+        eng_head = _rc.Engine(c=self.c, store_book=False,
+                              pf=self._eng.pf, exact=True)
+        out = []
+        consumed = 0
+        for k in range(head):
+            seg = data[k * chunk: (k + 1) * chunk]
+            out.extend(eng_head.feed(seg))
+            consumed += len(seg)
+        out.extend(eng_head.flush())          # close open tail at the boundary
+        snap = eng_head.save_state()
+        eng_head = None
+        # 2) parallel workers from the snapshot
+        starts_all = []
+
+        nseen0 = consumed      # snapshot's absolute stream position
+
+        def run(a: int, b: int):
+            eng = _rc.load_state(snap)
+            sp = eng.encode_spans(data[a:b])
+            # engine spans continue the snapshot's absolute offsets; rebase
+            # to this chunk's true position
+            off = a - nseen0
+            return [(s + off, e + off, i) for s, e, i in sp]
+
+        jobs = []
+        pos = consumed
+        while pos < n:
+            nxt = min(pos + chunk, n)
+            jobs.append((pos, nxt))
+            pos = nxt
+        with ThreadPoolExecutor(max_workers=threads or None) as ex:
+            for spans_part in ex.map(lambda ab: run(*ab), jobs):
+                starts_all.extend(spans_part)
+        return out + starts_all
 
     # ----------------------------------------------------------- bytes API
     def encode_bytes(self, data) -> list[int]:
@@ -197,15 +258,18 @@ def patch_from_sur(sur: np.ndarray | bytes, c: int) -> np.ndarray:
     return np.frombuffer(_rc.patch_from_sur(raw, int(c)), dtype=np.uint32)
 
 
-def batch_spans(docs: Sequence, c: int = 20, threads: int = 0):
+def batch_spans(docs: Sequence, c: int = 20, threads: int = 0,
+                fast: bool = False):
     """Parallel rate-patching of independent byte documents.
 
     Returns a list of (starts ndarray uint32, n_bytes); patch k spans
     [starts[k], starts[k+1]), the last ends at n_bytes. Docs are encoded
     cold-start and independently — identical results to `RateC(
-    store_book=False)` per doc, across all cores.
+    store_book=False)` per doc, across all cores. `fast=True` uses the
+    non-exact fast lane (see RateC(exact=False)).
     """
-    raws = _rc.batch([bytes(d) for d in docs], c=int(c), threads=threads)
+    raws = _rc.batch([bytes(d) for d in docs], c=int(c), threads=threads,
+                     fast=bool(fast))
     return [(np.frombuffer(raw, dtype=np.uint32), len(d))
             for raw, d in zip(raws, docs)]
 

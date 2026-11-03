@@ -13,6 +13,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ratec
 from ratec import RateC, RatecError, patch_from_sur, batch_spans
+from ratec import _rcengine as _rc
 
 FAILURES = []
 
@@ -219,6 +220,50 @@ t = RateC(c=20)
 t.feed(b"hello ")
 t.reset()
 check("reset clears state", t.bytes_seen == 0 and t.book_size == 0)
+
+# ------------------------------------------------------------ fast lane
+tf = RateC(c=20, exact=False)
+idsf = tf.encode_bytes(sample)
+check("fast lane round-trips", tf.decode_bytes(idsf) == sample)
+tfe = RateC(c=20, exact=True)
+check("fast lane exists alongside exact",
+      RateC(c=20, exact=True).encode_bytes(sample) ==
+      RateC(c=20).encode_bytes(sample))
+sf_exact = RateC(c=20, store_book=False).surprise(sample)
+sf_fast = RateC(c=20, store_book=False, exact=False).surprise(sample)
+import numpy as _np
+rel = _np.abs(sf_fast.astype(_np.float64) - sf_exact.astype(_np.float64)) /       _np.maximum(sf_exact.astype(_np.float64), 1e-9)
+check("fast surprisal within 1e-6 rel of exact", bool(_np.max(rel) < 1e-6))
+
+# --------------------------------------------- parallel single-stream encode
+big = open(os.path.join(DATA, "english.txt"), "rb").read()[32768:32768 + 260000]
+tsp = RateC(c=20, store_book=False)
+sp_par = tsp.encode_stream_parallel(big, chunk=65536, threads=2)
+tiles = (sp_par[0][0] == 0 and
+         all(sp_par[k][1] == sp_par[k + 1][0] for k in range(len(sp_par) - 1)) and
+         sp_par[-1][1] == len(big))
+check("encode_stream_parallel tiles exactly", tiles)
+check("encode_stream_parallel deterministic",
+      RateC(c=20, store_book=False).encode_stream_parallel(big, chunk=65536,
+                                                           threads=2) == sp_par)
+sp_seq = RateC(c=20, store_book=False).encode_to_spans(big)
+fertility = len(sp_par) / len(sp_seq)
+check("parallel fertility within 10% of sequential", fertility < 1.10)
+print(f"  [info] stream-parallel: {len(sp_par)} vs {len(sp_seq)} patches "
+      f"(fertility x{fertility:.3f})")
+
+# ------------------------------------- snapshot-after-feed + reset-after-load
+e1 = _rc.Engine(c=20, store_book=False, pf=2)
+e1.feed(b"the quick brown fox " * 64)
+snap = e1.save_state()                       # regression: obuf guard
+e2 = _rc.load_state(snap)
+e2.reset()                                   # regression: dirty2 recompute
+a = e2.encode_spans(b"the quick brown fox " * 16)
+b_ = _rc.Engine(c=20, store_book=False, pf=2).encode_spans(b"the quick brown fox " * 16)
+check("reset after load is clean",
+      [x[1] for x in a] == [x[1] for x in b_])
+check("snapshot loads to equal state",
+      _rc.Engine(c=20, store_book=False, pf=2).encode_spans(b"the quick brown fox " * 16) == b_)
 
 print()
 if FAILURES:

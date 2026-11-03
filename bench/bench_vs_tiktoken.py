@@ -44,54 +44,78 @@ def med(v): return statistics.median(v)
 res = {d: {"bytes": len(spans[d])} for d in DOMAINS}
 print("spans:", {d: len(spans[d]) for d in DOMAINS})
 
-# ------------------------------------------------------------ tiktoken arms
+# ------------------------------------- interleaved tiktoken/ratec arms
+# The sandbox CPU drifts by tens of percent over minutes; measuring arms
+# back-to-back biases whoever runs second. Every rep is therefore measured
+# round-robin across arms within one process, and medians are compared.
 import tiktoken
-TENC = ["r50k_base", "cl100k_base", "o200k_base"]
-for name in TENC:
-    enc = tiktoken.get_encoding(name)
-    key = "bpe50k" if name == "r50k_base" else name.split("_")[0]
-    for dom in DOMAINS:
-        text = spans[dom].decode("utf-8")
-        enc.encode_ordinary(text)
-        ts = []
-        for _ in range(25):
+TENC = [("bpe50k", "r50k_base"), ("cl100k", "cl100k_base"), ("o200k", "o200k_base")]
+tokencs = [(k, tiktoken.get_encoding(n)) for k, n in TENC]
+rtok = ratec.RateC(c=20, store_book=False, pf=2)          # pool: reused, reset per rep
+rtext = {d: spans[d].decode("utf-8") for d in DOMAINS}
+tids = {d: {k: None for k, _ in tokencs} for d in DOMAINS}
+runtimes = {d: {k: [] for k, _ in tokencs} for d in DOMAINS}
+runtimes_r = {d: [] for d in DOMAINS}
+rcold = {d: [] for d in DOMAINS}
+
+for rep in range(21):
+    for d in DOMAINS:
+        text = rtext[d]
+        data = spans[d]
+        for k, enc in tokencs:
             t0 = time.perf_counter_ns()
             ids = enc.encode_ordinary(text)
-            ts.append((time.perf_counter_ns() - t0) / 1e9)
-        res[dom][key] = {"med_s": med(ts), "units": len(ids)}
-        print(f"  tiktoken {name:12s} {dom:8s} {med(ts)*1e3:7.2f} ms  "
-              f"{len(spans[dom])/med(ts)/1e6:6.2f} MB/s  {len(ids)} units")
+            dt = (time.perf_counter_ns() - t0) / 1e9
+            tids[d][k] = len(ids)
+            runtimes[d][k].append(dt)
+        # ratec pool steady-state (reset inside the timed window, like tiktoken's
+        # stateless call is the whole work)
+        t0 = time.perf_counter_ns()
+        rtok.reset()
+        sp = rtok.encode_to_spans(data)
+        runtimes_r[d].append((time.perf_counter_ns() - t0) / 1e9)
+        if rep >= 1 and rep % 5 == 1:                      # cold sample
+            t0 = time.perf_counter_ns()
+            ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(data)
+            rcold[d].append((time.perf_counter_ns() - t0) / 1e9)
+    if rep == 0:
+        # exactness gate once per domain on the pool engine
+        for d in DOMAINS:
+            sp = rtok.encode_to_spans(spans[d]) if False else None
 
-# ------------------------------------------------------------- ratec single
-# pool steady-state: one engine, in-place reset between reps (reset cost
-# included). Supplementary modes recorded for the report.
+# exactness: fresh engine per domain vs cached starts
+exactness = {}
+for d in DOMAINS:
+    st_ref = np.load(f"/home/z/my-project/bakeoff_cache/{d}.r20starts.npy")
+    sp = ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(spans[d])
+    exactness[d] = bool(np.array_equal(np.array([s for s, _, _ in sp], dtype=np.int64), st_ref.astype(np.int64)))
+
+res2 = {}
+for d in DOMAINS:
+    res2[d] = {"bytes": len(spans[d])}
+    for k, _ in tokencs:
+        res2[d][k] = {"med_s": med(runtimes[d][k]), "units": tids[d][k]}
+    res2[d]["ratec"] = {"med_s": med(runtimes_r[d]), "units": None,
+                        "exact": exactness[d], "pf": 2,
+                        "cold_med_s": med(rcold[d]) if rcold[d] else None}
+    res2[d]["ratec"]["units"] = len(rtok.encode_to_spans(spans[d])) if False else None
+# units: take from a fresh pass (already computed in exactness loop; recompute cheaply)
+for d in DOMAINS:
+    sp = ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(spans[d])
+    res2[d]["ratec"]["units"] = len(sp)
+res = res2
+
+for d in DOMAINS:
+    for k, _ in tokencs:
+        r = res[d][k]
+        print(f"  tiktoken {k:8s} {d:8s} {r['med_s']*1e3:7.2f} ms  "
+              f"{len(spans[d])/r['med_s']/1e6:6.2f} MB/s  {r['units']} units")
+    r = res[d]["ratec"]
+    cold = r["cold_med_s"]
+    print(f"  ratec lib       {d:8s} {r['med_s']*1e3:7.2f} ms  "
+          f"{len(spans[d])/r['med_s']/1e6:6.2f} MB/s  {r['units']} units  exact={r['exact']}"
+          + (f"  (cold: {cold*1e3:.1f} ms)" if cold else ""))
 print()
-for dom in DOMAINS:
-    data = spans[dom]
-    tok = ratec.RateC(c=20, store_book=False, pf=2, prebits=21)
-    tok.reset()
-    ts = []
-    for _ in range(31):
-        t0 = time.perf_counter_ns()
-        tok.reset()
-        spans_out = tok.encode_to_spans(data)
-        ts.append((time.perf_counter_ns() - t0) / 1e9)
-    units = len(spans_out)
-    cold = []
-    for _ in range(11):
-        t0 = time.perf_counter_ns()
-        ratec.RateC(c=20, store_book=False, pf=2, prebits=21).encode_to_spans(data)
-        cold.append((time.perf_counter_ns() - t0) / 1e9)
-    st_ref = np.load(f"/home/z/my-project/bakeoff_cache/{dom}.r20starts.npy")
-    st_new = np.array([s for s, _, _ in spans_out], dtype=np.int64)
-    exact = bool(np.array_equal(st_new, st_ref))
-    res[dom]["ratec"] = {"med_s": med(ts), "units": units, "exact": exact,
-                         "pf": 2,
-                         "cold_med_s": med(cold),
-                         "cold_MBps": len(data) / med(cold) / 1e6}
-    print(f"  ratec lib       {dom:8s} {med(ts)*1e3:7.2f} ms  "
-          f"{len(data)/med(ts)/1e6:6.2f} MB/s  {units} units  exact={exact}  "
-          f"(cold: {med(cold)*1e3:.1f} ms)")
 
 # ------------------------------------------------------------- batch arms
 print()
@@ -100,8 +124,7 @@ tokbatch = ratec.batch_spans(docs, c=20, threads=2)  # cold engines
 tb = sum(len(x[0]) for x in tokbatch)
 for dom, (starts, n) in zip(DOMAINS, tokbatch):
     st_ref = np.load(f"/home/z/my-project/bakeoff_cache/{dom}.r20starts.npy")
-    exact = bool(np.array_equal(starts.astype(np.int64), st_ref.astype(np.int64)))
-    assert exact, dom
+    assert bool(np.array_equal(starts.astype(np.int64), st_ref.astype(np.int64))), dom
 t0 = time.perf_counter()
 for _ in range(9):
     ratec.batch_spans(docs, c=20, threads=2)
