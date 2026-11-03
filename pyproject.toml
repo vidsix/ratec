@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ratec"
+version = "0.1.0"
+description = "RateC: adaptive rate-based tokenizer (C-bit patches from a 6-order KT judge). No training data, no vocab file."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "RateC project"}]
+dependencies = ["numpy"]
+classifiers = [
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+[project.optional-dependencies]
+bench = ["tiktoken", "matplotlib"]
+
+[project.scripts]
+ratec = "ratec.cli:main"
+
+[tool.setuptools]
+packages = ["ratec"]
+
+[tool.setuptools.package-data]
+ratec = ["*.so", "*.pyd"]

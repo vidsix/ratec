@@ -1,0 +1,179 @@
+Metadata-Version: 2.4
+Name: ratec
+Version: 0.1.0
+Summary: RateC: adaptive rate-based tokenizer (C-bit patches from a 6-order KT judge). No training data, no vocab file.
+Author: RateC project
+License: MIT
+Classifier: Programming Language :: C
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Text Processing :: Linguistic
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Provides-Extra: bench
+Requires-Dist: tiktoken; extra == "bench"
+Requires-Dist: matplotlib; extra == "bench"
+
+# RateC — the rate-C information-vocabulary tokenizer, as a library
+
+`ratec` replaces BPE's learned merge table with an **adaptive entropy model
+(the judge)** that scores every byte, and a **greedy rate-packing rule (the
+patcher)** that cuts patches at a fixed C-bit budget. There is **no training
+data, no vocabulary file, no regex pre-tokenizer**: the model is the
+algorithm, it adapts as it reads, and any C works at any time.
+
+```
+pip install .            # C extension, gcc >= 9, x86-64 (or any 64-bit)
+```
+
+```python
+import ratec
+tok = ratec.RateC(c=20)
+
+ids = tok.encode("hello 你好!")          # patch ids (book-backed)
+tok.decode(ids)                          # -> "hello 你好!"  (round-trips)
+
+tok.encode_to_spans(b"...")              # [(start, end, id|None), ...]
+tok.surprise(b"...")                     # per-byte float32 surprisal
+ratec.batch_spans(docs, c=20, threads=N) # parallel bulk encoding
+```
+
+## Why it is different
+
+| | BPE (tiktoken) | RateC |
+|---|---|---|
+| vocabulary | fixed, fitted offline | none — patches are defined by information, not by a table |
+| C (tokens-per-byte dial) | retrain for every vocab size | any `c=1..64` at runtime |
+| modalities | text only (byte-fallback for the rest) | bytes are bytes: text, code, CJK, base64, PNG, PCM — one encoder |
+| adaptation | none | judge adapts continuously; optional snapshot = "warm start" |
+| new domain | out-of-vocabulary fury | just feed it |
+| LM interface | ids | ids **and** raw byte spans (the LM-visible structure) |
+
+Fertility (units per byte, C=20, this repo's bake-off corpora): ratec 0.20
+(en) / 0.29 (zh) / 0.50 (b64) vs tiktoken r50k 0.28 / 0.72 / 0.77 —
+**26–50% fewer LM positions** for the same bytes.
+
+## API
+
+### `ratec.RateC(c=20, store_book=True, pf=2, warm_state=None)`
+
+* **`c`** — patch budget in bits (1..64). Smaller C → shorter patches, more
+  of them. The judge is C-independent, so the choice is purely downstream
+  (embedding width, context budget).
+* **`store_book`** — keep the dynamic patch book (content → id, first-seen
+  order) so `encode`/`decode` round-trip without the source. Turn off for
+  bulk LM data prep; spans alone need no book.
+* **`pf`** — software prefetch depth 0..4 for the order-3..5 maps.
+* **`warm_state`** — snapshot bytes/path from `save_state()` (see below).
+
+Core methods (tiktoken-shaped where it makes sense):
+
+| method | semantics |
+|---|---|
+| `encode(text)` / `decode(ids)` | utf-8 ⇄ book ids |
+| `encode_bytes(b)` / `decode_bytes(ids)` | raw bytes ⇄ ids |
+| `encode_to_spans(b)` | `[(start, end, id)]` — patches tile the input exactly |
+| `surprise(b)` | float32 per-byte surprisal (judge state advances) |
+| `feed(b)` / `flush()` | streaming: patches closed by each chunk; spans are absolute |
+| `encode_batch(docs, threads)` | parallel, GIL released, one cold engine per doc |
+| `save_state()` / `RateC.from_state(x)` | full snapshot (judge + patcher + book) |
+| `reset()` | in-place clear (pages stay mapped → pooled reuse is fault-free) |
+
+Module-level: `ratec.patch_from_sur(sur, c)` (re-patch a stored surprisal at
+any C — the judge pass is C-independent, so C-sweeps are nearly free),
+`ratec.batch_spans(docs, c, threads)`, `ratec.RatecError`.
+
+CLI: `python -m ratec encode|decode|surprise|state|bench …`
+
+## Semantics (the precise bits)
+
+* **Judge.** Fixed-weight mixture of six adaptive KT estimators over byte
+  contexts of order 0..5. Per byte: `pm = Σ_oi W[oi]·q_oi(b)` with
+  `W = [.02,.04,.08,.16,.30,.40]`, KT smoothing `(cb+0.2)·inv/(1+tot·inv)`,
+  `inv = 1/(256·0.2)`, cold-start uniform `1/256`. Surprisal
+  `sur = -log2(pm)` (float32). Orders 0–2 use direct tables; orders 3–5 use
+  one shared open-addressing map with inline 8-byte occurrence windows
+  (prediction+update touch one cache line until a context promotes).
+* **Patcher.** Greedy under-shoot: a patch is the longest run with
+  `Σ sur ≤ C` (searchsorted right semantics), forced single-byte escapes
+  when one byte alone exceeds C.
+* **Streaming.** `feed(a); feed(b); flush()` is *bit-exact* with
+  `encode(a+b)`: the running prefix sum, open-patch state and judge tables
+  persist across calls. `flush()` hard-closes the open tail patch.
+* **Bit-exactness.** Built with `-ffp-contract=off -fno-fast-math` and the
+  same double-expression shapes as the reference pipeline; validated
+  bitwise (surprisal arrays and patch starts) against the baked-off
+  reference on four domains — see `tests/gate_bitexact.py`.
+* **Snapshot format.** `save_state()` returns a zlib-compressed blob
+  (magic `RCZ1`) containing the full judge tables (order-2 rows RLE'd),
+  maps, patcher state and book. A 120 KB-trained state is ~0.7 MB.
+  Snapshots are portable across processes with the same build; endianness
+  is native (x86-64).
+* **Limits.** Span offsets are uint32 → one engine covers ≤ 4 GiB of
+  stream. Orders-3..5 maps cost up to ~96 B of physical memory per hot
+  byte; `map_capbits` (default 2^22 slots) bounds them, with graceful
+  slowdown and a clean error if truly exhausted. Engines are not
+  thread-safe (use one per thread or `batch_spans`).
+
+## Performance (2-core Xeon, this sandbox, C=20, medians)
+
+Exact mode, bytes→patch spans, vs `tiktoken r50k_base` on the same spans:
+
+| domain | tiktoken r50k | RateC pool* | RateC cold | ratec/tiktoken |
+|---|---|---|---|---|
+| english | 15.6 MB/s | 9.1 MB/s | 7.0 MB/s | 0.58× |
+| code | 13.0 | 9.4 | 7.2 | 0.72× |
+| chinese | 14.2 | 8.2 | 6.5 | 0.58× |
+| base64 | 9.7 | 7.0 | 6.3 | 0.72× |
+| **overall** | **12.7** | **8.2** | **6.8** | **0.65×** |
+
+\* pool steady-state: engine reused with in-place reset (reset cost
+included). "cold" = fresh engine per document (first-touch faults included).
+
+With 2 threads (all 4 domains in parallel): RateC 11.6 MB/s aggregate vs
+tiktoken's batch 14.7 → 0.79×. Streaming a continuous stream (warm engine,
+no resets) reaches ~10.3 MB/s on english — the exact-mode compute ceiling
+here.
+
+**The honest verdict:** exact RateC is still ~1.5× slower than tiktoken
+per byte, single-threaded, because the judge does ~100× more arithmetic
+per byte than a merge-table lookup. RateC wins where it matters for LMs:
+26–50% fewer units per byte, no vocab files, any C, and it never
+out-of-vocabraries. The roadmap to raw speed (see below) is concrete and
+does not require giving up exactness.
+
+## Roadmap (ordered by measured headroom)
+
+1. **SIMD mixture terms** — the six order-terms are independent until the
+   final sequential `pm +=` sum; AVX-512 `vdivpd` across lanes preserves
+   per-lane IEEE semantics (bit-exact) and replaces 6 scalar `divsd`.
+   Estimated +10–20%.
+2. **Fast (non-exact) lane** — FMA contraction + polynomial log2 +
+   reciprocal tables, documented 1-ulp deviations, `RateC(exact=False)`.
+   Estimated 2–3×; the exact lane remains the reference.
+3. **>2-core scaling** — `batch_spans` scales linearly per engine; real
+   boxes have more cores than this sandbox.
+4. **Approximate multi-stream mode** — chunked parallel encoding of one
+   stream from periodic state checkpoints (quality-noise documented).
+
+## Layout
+
+```
+ratec/
+  _rcengine.c        the whole C core (engine, book, batch, snapshots)
+  api.py / cli.py    pythonic surface + CLI
+tests/
+  gate_bitexact.py   bitwise gate vs the validated reference
+  test_ratec.py      40+ checks: round-trips (text/binary), streaming
+                     parity, C sweep, batch, book, snapshots, errors
+bench/bench_vs_tiktoken.py   the table above, reproducible
+```
+
+Rebuild in place:
+
+```
+gcc -O3 -march=native -ffp-contract=off -fno-fast-math -fPIC -shared \
+    -I"$(python3 -c "import sysconfig;print(sysconfig.get_paths()['include'])")" \
+    ratec/_rcengine.c -o ratec/_rcengine.cpython-*.so -lm -lpthread
+```
