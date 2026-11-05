@@ -170,7 +170,7 @@ static inline int win_scan(const Ent *e, int distinct, uint8_t b) {
 
 /* --------------------------------------------------------------- OutVec */
 typedef struct { uint32_t *a; size_t n, cap; } OutVec;
-static int ov_init(OutVec *v) { v->a = NULL; v->n = v->cap = 0; }
+static int ov_init(OutVec *v) { v->a = NULL; v->n = v->cap = 0; return 0; }
 static void ov_free(OutVec *v) { free(v->a); ov_init(v); }
 static inline __attribute__((always_inline)) int ov_push(OutVec *v, uint32_t x) {
     if (v->n == v->cap) {
@@ -296,7 +296,8 @@ typedef struct {
     int store_book;
     int pf;                      /* prefetch depth 0..4                   */
     int fast;                    /* non-exact fast lane (poly log2, tree) */
-    int poisoned;                /* OOM mid-stream: state invalid         */
+    int pipe_mode;               /* 1: pipelined body, 0: sequential body */
+    int poisoned;                /* any failed feed: state invalid        */
 
     /* judge state */
     uint32_t cnt0[256];
@@ -320,20 +321,25 @@ typedef struct {
     uint64_t nseen;              /* absolute bytes processed              */
     uint64_t n_forced, n_patches;
 
+    /* reusable emit vectors: fed by feed/flush/surprise, reset (n=0) per
+     * call, capacity retained so steady-state calls never malloc/free */
+    OutVec ros, roe, roi;
+
     Book book;
 } RcCore;
 
 static RcCore *core_new(int C, int store_book, int pf, int prebits,
-                        int map_capbits, int fast);
+                        int map_capbits, int fast, int pipe_mode);
 static void core_free(RcCore *e);
 
 static RcCore *core_new(int C, int store_book, int pf, int prebits,
-                        int map_capbits, int fast) {
+                        int map_capbits, int fast, int pipe_mode) {
     RcCore *e = (RcCore *)calloc(1, sizeof(RcCore));
     if (!e) return NULL;
     e->C = C; e->store_book = store_book ? 1 : 0;
     e->pf = pf; e->map_capbits = (uint64_t)map_capbits;
     e->fast = fast ? 1 : 0;
+    e->pipe_mode = pipe_mode ? 1 : 0;
     e->cnt1 = (uint32_t *)calloc(256 * 256, 4);
     e->tot1 = (uint32_t *)calloc(256, 4);
     e->tot2 = (uint32_t *)calloc(65536, 4);
@@ -344,6 +350,7 @@ static RcCore *core_new(int C, int store_book, int pf, int prebits,
         map_alloc(&e->cmap, 10, sizeof(CEnt)) < 0) { core_free(e); return NULL; }
     book_init(&e->book);
     if (e->book.err) { core_free(e); return NULL; }
+    ov_init(&e->ros); ov_init(&e->roe); ov_init(&e->roi);
     return e;
 }
 
@@ -356,6 +363,7 @@ static void core_free(RcCore *e) {
     free(e->obuf);
     free(e->book.arena); free(e->book.off); free(e->book.ln);
     free(e->book.hk); free(e->book.hv);
+    ov_free(&e->ros); ov_free(&e->roe); ov_free(&e->roi);
     free(e);
 }
 
@@ -485,19 +493,24 @@ static inline float rc_log2_fast(double x) {
     return (float)-((double)e + fma(y, O, E));   /* sur = -log2(x) */
 }
 
-/* emit one closed patch (start,end,id). ove/ovi may be NULL. */
-#define EMIT(ST, EN, CT, CL) do { \
-    if ((ST) > 0xFFFFFFFFull || (EN) > 0xFFFFFFFFull) { rc = -2; goto done; } \
-    uint32_t id_ = ID_NONE; \
-    if (ovi && e->store_book) { \
-        id_ = book_intern(&e->book, (const uint8_t *)(CT), (size_t)(CL)); \
-        if (id_ == ID_NONE) { rc = -1; goto done; } \
-    } \
-    if (ovs && ov_push(ovs, (uint32_t)(ST)) < 0) { rc = -1; goto done; } \
-    if (ove && ov_push(ove, (uint32_t)(EN)) < 0) { rc = -1; goto done; } \
-    if (ovi && ov_push(ovi, id_) < 0) { rc = -1; goto done; } \
-    npatch++; \
-} while (0)
+/* emit one closed patch (start,end,id). ove/ovi may be NULL. Returns 0 or
+ * a negative error (-1 OOM, -2 span overflow); *npatch counts successes. */
+static inline __attribute__((always_inline)) int
+emit_patch(OutVec *ovs, OutVec *ove, OutVec *ovi, int store_book, Book *bk,
+           uint64_t st, uint64_t en, const uint8_t *ct, size_t cl,
+           size_t *npatch) {
+    if (st > 0xFFFFFFFFull || en > 0xFFFFFFFFull) return -2;
+    uint32_t id_ = ID_NONE;
+    if (ovi && store_book) {
+        id_ = book_intern(bk, ct, cl);
+        if (id_ == ID_NONE) return -1;
+    }
+    if (ovs && ov_push(ovs, (uint32_t)st) < 0) return -1;
+    if (ove && ov_push(ove, (uint32_t)en) < 0) return -1;
+    if (ovi && ov_push(ovi, id_) < 0) return -1;
+    (*npatch)++;
+    return 0;
+}
 
 static inline __attribute__((always_inline)) int
 run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
@@ -618,10 +631,16 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                 open_len++; i++;
             } else if (open_len == 0) {          /* forced single byte */
                 frc++;
-                EMIT(open_start, pos0 + i + 1, &b, 1);
+                {   const int erc = emit_patch(ovs, ove, ovi, sbook, &e->book,
+                                   open_start, pos0 + i + 1, &b, 1, &npatch);
+                    if (erc) { rc = erc; goto done; }
+                }
                 cs = cnext; patch_open = 0; i++;
             } else {                             /* close, then byte i */
-                EMIT(open_start, pos0 + i, obuf, open_len);
+                int erc_ = emit_patch(ovs, ove, ovi, sbook, &e->book,
+                                      open_start, pos0 + i, obuf, open_len,
+                                      &npatch);
+                if (erc_) { rc = erc_; goto done; }
                 patch_open = 0; open_len = 0;
                 lim = cs + (double)Cloc;         /* cs == cs[pos] exactly */
                 open_start = pos0 + i;
@@ -632,7 +651,11 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     open_len = 1; i++;
                 } else {
                     frc++;
-                    EMIT(open_start, pos0 + i + 1, &b, 1);
+                    {   const int erc = emit_patch(ovs, ove, ovi, sbook,
+                                                   &e->book, open_start,
+                                                   pos0 + i + 1, &b, 1, &npatch);
+                        if (erc) { rc = erc; goto done; }
+                    }
                     cs = cnext; patch_open = 0; i++;
                 }
             }
@@ -665,18 +688,258 @@ done:
     e->n_patches += npatch;
     return rc;
 }
-#undef EMIT
+
+/* ------------------------------------------------------- pipelined body */
+/* v0.3: the judge and the patcher run as two stages RP bytes apart. The
+ * judge for byte t never reads anything the patcher writes and vice
+ * versa, so the two serial chains overlap in the out-of-order window:
+ * glibc log2, the patcher branches and the book interning leave the
+ * judge's critical path entirely. Successful runs are bit-identical to
+ * the sequential body (same per-byte terms in the same sum order, same
+ * float32 surprisals, same patch decisions in the same order). On any
+ * error return the engine is poisoned by the caller: judge work may have
+ * advanced up to RP-1 bytes past the failing byte (the sequential body
+ * stops there), so error-path engine state is not comparable.
+ *
+ * RP bytes of lookahead also widen the prefetch horizon for free: the
+ * address-generation unit can run ahead of the patcher's tail. */
+#define RP 8
+
+typedef struct {
+    double   cs, lim;
+    int      open;
+    uint64_t ostart, olen;
+    uint8_t *obuf; size_t ocap;
+    long     frc;
+    size_t   npatch;
+    int      rc;
+} RPatch;
+
+static inline __attribute__((always_inline)) void
+patch_step(RPatch *p, double lga, uint8_t b, uint64_t pos,
+           OutVec *ovs, OutVec *ove, OutVec *ovi, Book *bk,
+           const int Cloc, const int sbook, const int FST)
+{
+    if (p->rc) return;
+    float sf;
+    if (FST) sf = lga > 0.0 ? rc_log2_fast(lga) : 64.0f;
+    else     sf = lga > 0.0 ? (float)(-log2(lga)) : 64.0f;
+    const double cnext = p->cs + (double)sf;
+    if (!p->open) {
+        p->ostart = pos;
+        p->lim = p->cs + (double)Cloc;
+        p->open = 1; p->olen = 0;
+    }
+    if (cnext <= p->lim) {
+        p->cs = cnext;
+        if (sbook) {
+            if (p->olen == p->ocap) {
+                size_t nc = p->ocap ? p->ocap * 2 : 64;
+                uint8_t *nb = (uint8_t *)realloc(p->obuf, nc);
+                if (!nb) { p->rc = -1; return; }
+                p->obuf = nb; p->ocap = nc;
+            }
+            p->obuf[p->olen] = b;
+        }
+        p->olen++;
+    } else if (p->olen == 0) {                   /* forced single byte */
+        p->frc++;
+        const int erc = emit_patch(ovs, ove, ovi, sbook, bk,
+                                   p->ostart, pos + 1, &b, 1, &p->npatch);
+        if (erc) { p->rc = erc; return; }
+        p->cs = cnext; p->open = 0;
+    } else {                                     /* close, then byte pos */
+        const int erc = emit_patch(ovs, ove, ovi, sbook, bk,
+                                   p->ostart, pos, p->obuf, (size_t)p->olen,
+                                   &p->npatch);
+        if (erc) { p->rc = erc; return; }
+        p->open = 0; p->olen = 0;
+        p->lim = p->cs + (double)Cloc;           /* cs == cs[pos] exactly */
+        p->ostart = pos;
+        p->open = 1;
+        if (cnext <= p->lim) {
+            p->cs = cnext;
+            if (sbook) p->obuf[0] = b;
+            p->olen = 1;
+        } else {
+            p->frc++;
+            const int erc2 = emit_patch(ovs, ove, ovi, sbook, bk,
+                                        p->ostart, pos + 1, &b, 1,
+                                        &p->npatch);
+            if (erc2) { p->rc = erc2; return; }
+            p->cs = cnext; p->open = 0;
+        }
+    }
+}
+
+static inline __attribute__((always_inline)) int
+run_body_pipe(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
+              float *sur_out, OutVec *ovs, OutVec *ove, OutVec *ovi,
+              const int PF)
+{
+    Map tl = e->tmap, tc = e->cmap;
+    uint64_t h[NO]; memcpy(h, e->h, sizeof h);
+    uint32_t *cnt0 = e->cnt0, *cnt1 = e->cnt1, *tot1 = e->tot1;
+    uint32_t *tot2 = e->tot2, *cnt2 = e->cnt2;
+    uint64_t *dirty2 = e->dirty2;
+    const int sbook = e->store_book;
+    const int FST = e->fast;
+    const uint64_t pos0 = e->nseen;
+    const int Cloc = e->C;
+    const uint64_t mapcap = e->map_capbits;
+    const double inv = 1.0 / (256.0 * ALPHA);
+    double term;
+    RPatch p = { e->cs, e->lim, e->patch_open, e->open_start, e->open_len,
+                 e->obuf, e->ocap, 0, 0, 0 };
+    double lgar[RP]; uint8_t br[RP];
+    size_t t = 0, nproc = n;
+    int rc = 0;
+
+    while (t < n) {
+        /* -------- patch stage: byte t - RP -------- */
+        if (want_patches && t >= RP) {
+            const size_t j = t - RP;
+            patch_step(&p, lgar[j & (RP - 1)], br[j & (RP - 1)], pos0 + j,
+                       ovs, ove, ovi, &e->book, Cloc, sbook, FST);
+            if (p.rc) { rc = p.rc; nproc = j; goto done; }
+        }
+        /* -------- judge stage: byte t -------- */
+        {
+            const uint8_t b = buf[t];
+            double pm = 0.0, pm0 = 0.0, pm1 = 0.0, pm2 = 0.0, pm3 = 0.0,
+                   pm4 = 0.0, pm5 = 0.0;
+
+            /* order 0: global context, total = bytes seen so far */
+            {
+                const uint64_t tot = pos0 + t;
+                const uint32_t c0 = cnt0[b];
+                if (tot) {
+                    term = W[0] * ((double)c0 + ALPHA); term = term * inv;
+                    term = term / (1.0 + (double)tot * inv);
+                } else term = W[0] * 0.00390625;
+                if (FST) pm0 = term; else pm += term;
+                cnt0[b] = c0 + 1;
+            }
+            /* order 1: direct arrays */
+            {
+                const uint32_t t1v = tot1[h[1]];
+                const uint32_t c1v = t1v ? cnt1[(h[1] << 8) | b] : 0;
+                if (t1v) {
+                    term = W[1] * ((double)c1v + ALPHA); term = term * inv;
+                    term = term / (1.0 + (double)t1v * inv);
+                } else term = W[1] * 0.00390625;
+                if (FST) pm1 = term; else pm += term;
+                tot1[h[1]] = t1v + 1;
+                cnt1[(h[1] << 8) | b] = c1v + 1;
+                h[1] = ((h[1] << 8) | b) & MASK[1];
+            }
+            /* order 2: direct arrays */
+            {
+                const uint32_t t2v = tot2[h[2]];
+                const uint32_t c2v = t2v ? cnt2[((uint64_t)h[2] << 8) | b] : 0;
+                if (t2v) {
+                    term = W[2] * ((double)c2v + ALPHA); term = term * inv;
+                    term = term / (1.0 + (double)t2v * inv);
+                } else term = W[2] * 0.00390625;
+                if (FST) pm2 = term; else pm += term;
+                tot2[h[2]] = t2v + 1;
+                cnt2[((uint64_t)h[2] << 8) | b] = c2v + 1;
+                dirty2[h[2] >> 6] |= 1ull << (h[2] & 63);
+                h[2] = ((h[2] << 8) | b) & MASK[2];
+            }
+
+            if (PF > 0) {
+                /* rolling h[oi] forward over buf[t..t+p-1] yields the
+                 * context that byte t+p will probe; prefetch its slot. */
+                for (int q = 1; q <= PF && t + q < n; q++) {
+                    for (int oi = 3; oi < NO; oi++) {
+                        uint64_t hc = h[oi];
+                        for (int q2 = 0; q2 < q; q2++)
+                            hc = ((hc << 8) | buf[t + q2]) & MASK[oi];
+                        const uint64_t nok = ((uint64_t)oi << 48) | hc;
+                        __builtin_prefetch((uint8_t *)tl.e +
+                            (((nok * GOLDEN) >> (64 - tl.capbits))) * tl.esize,
+                            1, 3);
+                    }
+                }
+            }
+
+            /* orders 3-5 */
+            DO_ORDER(3); DO_ORDER(4); DO_ORDER(5);
+
+            if (!want_patches) {
+                if (FST) {
+                    const double t03 = pm0 + pm1 + pm2, t45 = pm3 + pm4 + pm5;
+                    const double pmt = t03 + t45;
+                    if (sur_out)
+                        sur_out[t] = pmt > 0.0 ? rc_log2_fast(pmt) : 64.0f;
+                } else if (sur_out) {
+                    sur_out[t] = pm > 0.0 ? (float)(-log2(pm)) : 64.0f;
+                }
+            } else {
+                if (FST) {
+                    const double t03 = pm0 + pm1 + pm2, t45 = pm3 + pm4 + pm5;
+                    lgar[t & (RP - 1)] = t03 + t45;
+                } else {
+                    lgar[t & (RP - 1)] = pm;
+                }
+                br[t & (RP - 1)] = b;
+            }
+        }
+
+        /* map growth between bytes (no slot pointers held here) */
+        if ((tl.n + 1) * 4 >= (1ull << tl.capbits) * 3) {
+            if (tl.capbits < mapcap) {
+                if (map_grow(&tl)) { rc = -1; nproc = t + 1; goto done; }
+            } else if ((tl.n + 1) * 16 >= (1ull << tl.capbits) * 15) {
+                rc = -3; t++; nproc = t; break;            /* map full */
+            }
+        }
+        if ((tc.n + 1) * 4 >= (1ull << tc.capbits) * 3) {
+            if (tc.capbits < mapcap) {
+                if (map_grow(&tc)) { rc = -1; nproc = t + 1; goto done; }
+            } else if ((tc.n + 1) * 16 >= (1ull << tc.capbits) * 15) {
+                rc = -3; t++; nproc = t; break;
+            }
+        }
+        t++;
+    }
+    /* drain the patch stage tail */
+    if (want_patches && rc == 0 && t > 0) {
+        const size_t jstart = t >= RP ? t - RP : 0;
+        const size_t jend = t - 1;
+        for (size_t j = jstart; j <= jend && rc == 0; j++) {
+            patch_step(&p, lgar[j & (RP - 1)], br[j & (RP - 1)], pos0 + j,
+                       ovs, ove, ovi, &e->book, Cloc, sbook, FST);
+            if (p.rc) { rc = p.rc; nproc = j; }
+        }
+    }
+done:
+    e->tmap = tl; e->cmap = tc;
+    memcpy(e->h, h, sizeof h);
+    e->cs = p.cs; e->lim = p.lim; e->patch_open = p.open;
+    e->open_start = p.ostart; e->open_len = p.olen;
+    e->obuf = p.obuf; e->ocap = p.ocap;
+    e->nseen = pos0 + nproc;
+    e->n_forced += (uint64_t)p.frc;
+    e->n_patches += p.npatch;
+    return rc;
+}
+#undef DO_ORDER_PM
+
+#define RC_DISPATCH(BODY) switch (e->pf) { \
+    case 0:  return BODY(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 0); \
+    case 1:  return BODY(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 1); \
+    case 2:  return BODY(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 2); \
+    case 3:  return BODY(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 3); \
+    case 4:  return BODY(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 4); \
+    default: return BODY(e, buf, n, want_patches, sur_out, ovs, ove, ovi, PF_DEFAULT); \
+}
 
 static int core_run(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     float *sur_out, OutVec *ovs, OutVec *ove, OutVec *ovi) {
-    switch (e->pf) {
-    case 0:  return run_body(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 0);
-    case 1:  return run_body(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 1);
-    case 2:  return run_body(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 2);
-    case 3:  return run_body(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 3);
-    case 4:  return run_body(e, buf, n, want_patches, sur_out, ovs, ove, ovi, 4);
-    default: return run_body(e, buf, n, want_patches, sur_out, ovs, ove, ovi, PF_DEFAULT);
-    }
+    if (e->pipe_mode) RC_DISPATCH(run_body_pipe)
+    RC_DISPATCH(run_body)
 }
 
 /* close the open patch (if any); end offset = current position */
@@ -800,7 +1063,8 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     }
     if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
     if (magic != RCST_MAGIC || ver < 2 || ver > 4) return NULL;
-    RcCore *e = core_new((int)C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT, (int)fz);
+    RcCore *e = core_new((int)C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT,
+                         (int)fz, 1);
     if (!e) return NULL;
     if (rd_u64(&r, &e->nseen) || rd_u64(&r, &e->n_forced) ||
         rd_u64(&r, &e->n_patches)) goto fail;
@@ -984,7 +1248,7 @@ static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
     if (!self) return NULL;
     self->busy = 0;
     self->core = core_new(C, store_book, pf < 0 ? PF_DEFAULT : pf,
-                          prebits, map_capbits, fast);
+                          prebits, map_capbits, fast, 1);
     if (!self->core) { Py_DECREF(self); return PyErr_NoMemory(); }
     return (PyObject *)self;
 }
@@ -1018,27 +1282,31 @@ static PyObject *Engine_feedflush(EngineObj *self, PyObject *arg, int do_flush) 
     if (PyObject_GetBuffer(arg, &view, PyBUF_SIMPLE) < 0) {
         self->busy = 0; return NULL;
     }
-    OutVec s, e2, ids; ov_init(&s); ov_init(&e2); ov_init(&ids);
+    /* reusable emit vectors: capacity survives across calls */
+    OutVec *s = &self->core->ros, *e2 = &self->core->roe,
+           *ids = &self->core->roi;
+    s->n = 0; e2->n = 0; ids->n = 0;
     int rc;
     Py_BEGIN_ALLOW_THREADS
     rc = core_reserve(self->core, (size_t)view.len);
     if (rc == 0)
         rc = core_run(self->core, (const uint8_t *)view.buf, (size_t)view.len,
-                      1, NULL, &s, &e2, &ids);
+                      1, NULL, s, e2, ids);
     if (rc == 0 && do_flush)
-        rc = core_flush(self->core, &s, &e2, &ids);
+        rc = core_flush(self->core, s, e2, ids);
     Py_END_ALLOW_THREADS
     PyBuffer_Release(&view);
     self->busy = 0;
     PyObject *out = NULL;
-    if (rc == 0) out = build_patch_list(&s, &e2, &ids);
+    if (rc == 0) out = build_patch_list(s, e2, ids);
     else if (rc == -1) PyErr_NoMemory();
     else if (rc == -3)
         PyErr_SetString(RatecError, "context map exhausted; raise "
                         "map_capbits or encode in chunks");
     else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
-    if (rc < 0) self->core->poisoned = (rc == -1);
-    ov_free(&s); ov_free(&e2); ov_free(&ids);
+    /* any failed feed leaves the engine unusable: the pipelined judge may
+     * have advanced past the failing byte. reset() recovers. */
+    if (rc < 0) self->core->poisoned = 1;
     return out;
 }
 
@@ -1048,18 +1316,19 @@ static PyObject *Engine_feed(EngineObj *self, PyObject *arg) {
 static PyObject *Engine_flush(EngineObj *self, PyObject *Py_UNUSED(ignored)) {
     if (!Eng_busy(self)) return NULL;
     self->busy = 1;
-    OutVec s, e2, ids; ov_init(&s); ov_init(&e2); ov_init(&ids);
+    OutVec *s = &self->core->ros, *e2 = &self->core->roe,
+           *ids = &self->core->roi;
+    s->n = 0; e2->n = 0; ids->n = 0;
     int rc;
     Py_BEGIN_ALLOW_THREADS
-    rc = core_flush(self->core, &s, &e2, &ids);
+    rc = core_flush(self->core, s, e2, ids);
     Py_END_ALLOW_THREADS
     self->busy = 0;
     PyObject *out = NULL;
-    if (rc == 0) out = build_patch_list(&s, &e2, &ids);
+    if (rc == 0) out = build_patch_list(s, e2, ids);
     else if (rc == -1) PyErr_NoMemory();
     else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
-    if (rc < 0) self->core->poisoned = (rc == -1);
-    ov_free(&s); ov_free(&e2); ov_free(&ids);
+    if (rc < 0) self->core->poisoned = 1;
     return out;
 }
 static PyObject *Engine_surprise(EngineObj *self, PyObject *arg) {
@@ -1093,25 +1362,48 @@ static PyObject *Engine_surprise(EngineObj *self, PyObject *arg) {
     return out;
 }
 static PyObject *Engine_encode_bytes(EngineObj *self, PyObject *arg) {
+    /* low-latency path: runs the engine with the id vector only (no span
+     * tuples are built, no (start,end,id) list is materialized) */
     if (!self->core->store_book) {
         PyErr_SetString(RatecError,
                         "encode_bytes requires store_book=True");
         return NULL;
     }
-    PyObject *spans = Engine_feedflush(self, arg, 1);
-    if (!spans) return NULL;
-    PyObject *out = PyList_New(PyList_GET_SIZE(spans));
-    if (!out) { Py_DECREF(spans); return NULL; }
-    for (Py_ssize_t k = 0; k < PyList_GET_SIZE(spans); k++) {
-        PyObject *tup = PyList_GET_ITEM(spans, k);   /* borrowed */
-        PyObject *pid = PyTuple_GET_ITEM(tup, 2);
-        if (pid == Py_None) { Py_DECREF(out); Py_DECREF(spans);
-            PyErr_SetString(RatecError, "internal: missing id"); return NULL; }
-        PyObject *iv = PyLong_FromLong(PyLong_AsLong(pid));
-        if (!iv) { Py_DECREF(out); Py_DECREF(spans); return NULL; }
-        PyList_SET_ITEM(out, k, iv);
+    Py_buffer view;
+    if (!Eng_busy(self)) return NULL;
+    self->busy = 1;
+    if (PyObject_GetBuffer(arg, &view, PyBUF_SIMPLE) < 0) {
+        self->busy = 0; return NULL;
     }
-    Py_DECREF(spans);
+    OutVec *ids = &self->core->roi;
+    ids->n = 0;
+    int rc;
+    Py_BEGIN_ALLOW_THREADS
+    rc = core_reserve(self->core, (size_t)view.len);
+    if (rc == 0)
+        rc = core_run(self->core, (const uint8_t *)view.buf, (size_t)view.len,
+                      1, NULL, NULL, NULL, ids);
+    if (rc == 0)
+        rc = core_flush(self->core, NULL, NULL, ids);
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&view);
+    self->busy = 0;
+    if (rc != 0) {
+        self->core->poisoned = 1;
+        if (rc == -1) return PyErr_NoMemory();
+        if (rc == -3)
+            PyErr_SetString(RatecError, "context map exhausted; raise "
+                            "map_capbits or encode in chunks");
+        else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+        return NULL;
+    }
+    PyObject *out = PyList_New((Py_ssize_t)ids->n);
+    if (!out) return PyErr_NoMemory();
+    for (size_t k = 0; k < ids->n; k++) {
+        PyObject *iv = PyLong_FromUnsignedLong(ids->a[k]);
+        if (!iv) { Py_DECREF(out); return NULL; }
+        PyList_SET_ITEM(out, (Py_ssize_t)k, iv);
+    }
     return out;
 }
 static PyObject *Engine_encode_spans(EngineObj *self, PyObject *arg) {
@@ -1267,7 +1559,7 @@ static void *bworker(void *argp) {
         if (idx >= p->njobs) break;
         BJob *j = &p->jobs[idx];
         RcCore *core = core_new(j->c, 0, PF_DEFAULT, j->prebits,
-                                MAP_CAPBITS_DEFAULT, j->fast);
+                                MAP_CAPBITS_DEFAULT, j->fast, 1);
         if (!core) { j->err = 1; continue; }
         OutVec ov; ov_init(&ov);
         int rc = core_run(core, j->data, j->n, 1, NULL, &ov, NULL, NULL);
@@ -1401,6 +1693,7 @@ static PyObject *rc_load_state(PyObject *self, PyObject *arg) {
         PyErr_SetString(PyExc_ValueError, "invalid or truncated ratec state");
         return NULL;
     }
+    core->pipe_mode = 1;          /* snapshots may predate the pipeline */
     EngineObj *selfobj = (EngineObj *)Engine_Type.tp_alloc(&Engine_Type, 0);
     if (!selfobj) { core_free(core); return NULL; }
     selfobj->busy = 0;
@@ -1454,7 +1747,7 @@ PyMODINIT_FUNC PyInit__rcengine(void) {
 /* ------------------------------------------------- standalone harness -- */
 /* Compile:  gcc -O3 -march=native -ffp-contract=off -fno-fast-math
  *             -DRC_STANDALONE -o /tmp/rcsa ratec/_rcengine.c -lm -lpthread
- * Usage:    /tmp/rcsa <file> <C> <pf> <prebits> <reps>          */
+ * Usage:    /tmp/rcsa <file> <C> <pf> <prebits> <reps> [fast] [pipe]     */
 #ifdef RC_STANDALONE
 #include <stdio.h>
 #include <time.h>
@@ -1471,9 +1764,11 @@ int main(int argc, char **argv) {
     int C = atoi(argv[2]), pf = atoi(argv[3]), prebits = atoi(argv[4]);
     int reps = atoi(argv[5]);
     int fastarg = (argc > 6) ? atoi(argv[6]) : 0;
+    int pipec  = (argc > 7) ? atoi(argv[7]) : 1;
     double inv_dummy = 0; (void)inv_dummy;
     for (int r = -1; r < reps; r++) {
-        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT, fastarg);
+        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT,
+                                fastarg, pipec);
         core_reserve(core, (size_t)n);
         OutVec ov; ov_init(&ov);
         struct timespec ts0, ts1;
