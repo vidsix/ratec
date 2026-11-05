@@ -7,6 +7,7 @@ ratec/_rcengine.c
 ratec/_rcengine.cpython-312-x86_64-linux-gnu.so
 ratec/api.py
 ratec/cli.py
+ratec/smollm2.py
 ratec.egg-info/PKG-INFO
 ratec.egg-info/SOURCES.txt
 ratec.egg-info/dependency_links.txt
@@ -14,3 +15,4 @@ ratec.egg-info/entry_points.txt
 ratec.egg-info/requires.txt
 ratec.egg-info/top_level.txt
 tests/test_ratec.py
+tests/test_smollm2_port.py
