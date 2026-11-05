@@ -80,3 +80,77 @@ gcc -O3 -march=native -ffp-contract=off -fno-fast-math -DRC_STANDALONE \
     -o rcsa_pool ../ratec/_rcengine.c -lm -lpthread
 ./rcsa_pool prof5mb.bin 20 2 21 3 c     # pooled steady-state + checksum
 ```
+
+## v0.3 campaign — SIMD / pipeline experiments (measured and rejected)
+
+The v0.3 directive was "SIMD-optimize the kernel so it reads multiple
+tokens ahead and coordinates them". Every candidate was built, gated
+bit-exact, and measured with interleaved best-of-9 A/B on the standalone
+harness (english/code/chinese/base64, 20 pf/prebits points). Ground
+truth about the box first, because it explains the results:
+
+### VM ground truth (micro-calibrators, scripts/calib.c, scripts/ipctest.c)
+
+| probe | result |
+| --- | --- |
+| serial imul+add chain | 3.6 cy/iter → effective ~3.55 GHz |
+| 4 independent ALU chains | ~4.6 uops/cyc — the CPU is NOT IPC-capped |
+| random pointer-chase 512 KB | 2.3 ns/hop (L2, normal) |
+| random pointer-chase 64 MB | **52.2 ns/hop ≈ 185 cy** (DRAM-class) |
+| divsd throughput | 3.66 cy/div (normal) |
+
+### Where the time goes
+
+* Repetitive input ('aaaa'*300k, working set ≈ L1): **20.2 MB/s** — the
+  hot-loop compute/dependency floor is ~160 cy/byte on this uarch.
+* Real text (300 KB english): ~6.5 MB/s → **~70% of real-text time is
+  DRAM-class latency** on the random table probes (tmap slots + the
+  64 MB order-2 row space).
+* Prefetch depth sweep (scalar, sequential body): pf0 4.25 → pf1 5.24 →
+  **pf2 6.51** → pf3 5.98 → pf4 5.63 MB/s. Deeper prefetch *hurts*
+  (RFO pollution of L1/L2 from write-intent prefetches).
+* Clamping the order-2 row space into L2 (ablation only): +17-18% → the
+  order-2 table costs about a fifth of the wall; the tmap probes the rest.
+* Table size (prebits): 16-18 ≈ 21 > 20; prebits=24 collapses to
+  2.05 MB/s (1 GB table). Residency beats capacity.
+* log2 (fast poly lane vs glibc): +1-7%; divisions (6×divsd/byte,
+  ~22 cy divider occupancy): not the bottleneck (nodiv ablation within
+  noise). NOT worth vectorizing.
+
+### Candidate 1 — two-stage judge/patch pipeline (RP=8 ring)
+
+Judge and patcher are provably independent chains; a ring decouples
+them so log2 + patch branches + book interning "leave" the judge path.
+Result: the OoO window (≈512 uops ≈ 3-4 bytes in flight) already
+overlaps those chains; the ring adds 2 stores + 2 loads per byte.
+Measured: english 6.78 vs 7.40 seq (-8%), chinese -10%, code -2%,
+base64 +3%. **Rejected** (kept in git history, commit b942079).
+
+### Candidate 2 — AVX-512 address-generation unit (pfau)
+
+3-lane contexts for orders 3-5 stepped S bytes ahead, one vpmullq per
+horizon, scalar prefetch issue. Single-horizon (S=12..20) and dual-
+horizon (S=4 + S=4+4·pf) variants both lose to the scalar loop
+(6 prefetches/byte, addresses from register-resident h[]): the vector
+path pays ~8-10 512-bit uops/byte plus store/reload extraction, while
+the scalar math is ~25 cheap ALU uops the scheduler hides anyway.
+Measured: AU 6.23/5.45/6.24/6.74 vs scalar 6.78/5.71/6.45/6.87 MB/s on
+english/code/chinese/base64. **Rejected** (same commit).
+
+### Kept from v0.3 (pure wins, bit-exact)
+
+* Reusable emit vectors in the core — steady-state `feed` does zero
+  malloc/free (was 3 alloc/free per call).
+* Ids-only `encode_bytes` path — no span tuples materialized.
+* Python-side hot-method binding via an engine-slot property
+  (encode("hello world 123") end-to-end: **1.28 µs**, decode: 0.43 µs).
+* Poison-on-any-failed-feed policy (reset() recovers).
+
+### Remaining levers (not taken)
+
+* Working-set reduction is semantics-constrained: Ent is 64 B (one
+  line) and WIN=16 window promotion is part of the golden behavior;
+  shrinking either changes surprisal values and breaks bit-exactness.
+* The order-2 row space could become a 16 B-entry map (~10x smaller
+  touched set) at the cost of a probe on the hot path — plausible
+  future experiment, needs a snapshot format bump (v5).

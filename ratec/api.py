@@ -63,34 +63,45 @@ class RateC:
                                exact=exact)
         if warm_state is not None:
             state = warm_state
-            if isinstance(state, (str, bytes, bytearray)) and not isinstance(state, str):
-                pass
             if isinstance(state, str):
                 with open(state, "rb") as f:
                     raw = f.read()
             else:
                 raw = bytes(state)
-            new = _rc.load_state(_maybe_decompress(raw))
-            # swap in the loaded core, preserving nothing (it is the state)
-            self._eng = new
-            if c is not None and new.c != c:
-                # caller asked for a C different than the snapshot's: keep the
-                # snapshot's C (judge state is shared, C only affects the
-                # patcher and changing it mid-stream is ill-defined).
-                pass
+            # swap in the loaded core, preserving nothing (it is the state);
+            # a snapshot carries its own C (judge state is shared, C only
+            # affects the patcher and changing it mid-stream is ill-defined)
+            self._eng = _rc.load_state(_maybe_decompress(raw))
+        # bind hot methods (property setter below keeps them fresh if a
+        # caller swaps self._eng afterwards): per-call attribute lookup on
+        # the engine object is the largest Python-side cost for small inputs
+        self._eng = self._eng
+
+    # engine slot with re-binding: swapping self._eng refreshes the hot
+    # bound methods used by encode/decode/spans
+    @property
+    def _eng(self):
+        return self._engine_obj
+
+    @_eng.setter
+    def _eng(self, value):
+        self._engine_obj = value
+        self._enc = value.encode_bytes
+        self._dec = value.decode_bytes
+        self._spans = value.encode_spans
 
     # ------------------------------------------------------------ text API
     def encode(self, text, *, c: int | None = None) -> list[int]:
         """str | bytes -> patch ids (utf-8 is the byte interface)."""
-        data = text.encode("utf-8") if isinstance(text, str) else bytes(text)
         if c is not None and c != self.c:
             raise ValueError(
                 "per-call c is not supported on a stateful engine; build a "
                 "RateC(c=...) or use ratec.patch_from_sur for offline sweeps")
-        return self._eng.encode_bytes(data)
+        data = text.encode("utf-8") if isinstance(text, str) else bytes(text)
+        return self._enc(data)
 
     def decode(self, ids: Sequence[int]) -> str:
-        return self._eng.decode_bytes(list(ids)).decode("utf-8")
+        return self._dec(list(ids)).decode("utf-8")
 
     # --------------------------------------------------- parallel stream
     def encode_stream_parallel(self, data, chunk: int = 1 << 20,
@@ -153,14 +164,14 @@ class RateC:
 
     # ----------------------------------------------------------- bytes API
     def encode_bytes(self, data) -> list[int]:
-        return self._eng.encode_bytes(bytes(data))
+        return self._enc(bytes(data))
 
     def decode_bytes(self, ids: Sequence[int]) -> bytes:
-        return self._eng.decode_bytes(list(ids))
+        return self._dec(list(ids))
 
     def encode_to_spans(self, data) -> list[tuple[int, int, int | None]]:
         """byte spans [(start, end, id|None), ...] — the LM-facing view."""
-        return self._eng.encode_spans(_as_bytes(data))
+        return self._spans(_as_bytes(data))
 
     def encode_batch(self, docs: Sequence, threads: int = 0):
         """Parallel spans for independent docs (bookless, GIL released).
