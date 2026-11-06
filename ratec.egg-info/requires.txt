@@ -1,5 +1,0 @@
-numpy
-
-[bench]
-tiktoken
-matplotlib

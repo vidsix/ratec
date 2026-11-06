@@ -6,6 +6,11 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
+> **Status:** v0.3.0, experimental. The C core and byte-level semantics are
+> stable and bit-exact gate-verified; the LM-side surface (`ratec.smollm2`)
+> is new and may still move. Code-first repo: run `tests/` and `bench/`
+> yourself — no benchmark claims against SOTA in this README.
+
 ```
 pip install .            # C extension, gcc >= 9, x86-64 (or any 64-bit)
 ```
@@ -52,7 +57,7 @@ Fertility (units per byte, C=20, this repo's bake-off corpora): ratec 0.20
   order) so `encode`/`decode` round-trip without the source. Turn off for
   bulk LM data prep; spans alone need no book.
 * **`pf`** — software prefetch depth 0..4 for the order-3..5 maps
-  (default 2 — best on every machine we measured).
+  (default: auto-tuned; 2–3 measured best on x86-64).
 * **`exact`** — `False` selects the fast lane: polynomial log2 (max
   deviation 1.1e-7 relative ≈ one float32 ulp, 100% patch-start agreement
   with exact on our test corpora) plus a relaxed summation tree. Not
@@ -78,6 +83,32 @@ any C — the judge pass is C-independent, so C-sweeps are nearly free),
 `ratec.batch_spans(docs, c, threads)`, `ratec.RatecError`.
 
 CLI: `python -m ratec encode|decode|surprise|state|bench …`
+
+## LM interface (v0.3): HF tokenizer + SmolLM2 port
+
+`ratec.smollm2` turns a RateC snapshot into a first-class HF tokenizer for
+Llama-family training — details in `docs/smollm2_port.md`. The shape:
+
+```python
+import ratec
+from ratec.smollm2 import RateCTokenizer, build_smollm2_ratec_config
+
+tok = ratec.RateC(c=20)
+for chunk in corpus:                 # 1. "training" = ingesting bytes;
+    tok.encode_bytes(chunk)          #    judge + book adapt as they read
+snapshot = tok.save_state()
+
+tokenizer = RateCTokenizer(snapshot=snapshot)   # 2. freeze into an HF tokenizer
+tokenizer.save_pretrained("ratec-tokenizer")    #    frozen vocab + 256 byte-fallbacks
+
+cfg = build_smollm2_ratec_config(tokenizer)     # 3. SmolLM2-135M-shaped LlamaConfig
+# train any LlamaForCausalLM on (patch_id, patch_len) pairs from
+# tokenizer.encode_for_lm(text) — sum(lens) == len(utf8 bytes), always
+```
+
+Key properties: any text round-trips **byte-exactly** with a frozen vocab;
+`encode_for_lm` is the MegaByte/BLT-style `(id, byte_length)` contract;
+special tokens live in a reserved id block that never collides with the book.
 
 ## Semantics (the precise bits)
 
@@ -163,6 +194,10 @@ paths to raw speed.
    schedules; per-order tables sized to distinct-context counts; on
    real multi-core boxes, batch/parallel modes dominate everything
    single-threaded.
+5. **LM track (active):** twin-study training harness — same byte
+   budget, RateC vs BPE vs raw bytes, measured on BPB / params /
+   FLOPs-per-byte; tokenizer ecosystem bridges (GGUF/llama.cpp, vLLM)
+   once the training side settles.
 
 ## Layout
 
@@ -170,11 +205,18 @@ paths to raw speed.
 ratec/
   _rcengine.c        the whole C core (engine, book, batch, snapshots)
   api.py / cli.py    pythonic surface + CLI
+  smollm2.py         HF tokenizer (frozen vocab) + SmolLM2 config builder
 tests/
   gate_bitexact.py   bitwise gate vs the validated reference
   test_ratec.py      40+ checks: round-trips (text/binary), streaming
                      parity, C sweep, batch, book, snapshots, errors
-bench/bench_vs_tiktoken.py   the table above, reproducible
+  test_smollm2_port.py   freeze / roundtrip / fallback / specials / config
+bench/
+  bench_vs_tiktoken.py   fertility table above, reproducible
+  bench_c_sweep.py       tokens/byte + MB/s across C, golden-verified per C
+docs/
+  smollm2_port.md    the LM port, precisely
+  PROFILING.md       the ablation profile behind the v2 engine
 ```
 
 Rebuild in place:
@@ -184,3 +226,7 @@ gcc -O3 -march=native -ffp-contract=off -fno-fast-math -fPIC -shared \
     -I"$(python3 -c "import sysconfig;print(sysconfig.get_paths()['include'])")" \
     ratec/_rcengine.c -o ratec/_rcengine.cpython-*.so -lm -lpthread
 ```
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).

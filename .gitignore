@@ -6,3 +6,6 @@ __pycache__/
 dist/
 *.egg-info
 .venv/
+.pytest_cache/
+experiments/data/
+experiments/runs/
