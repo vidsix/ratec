@@ -16,7 +16,8 @@
  *     is lim = cs + C with the running double cs itself (the bench kernel
  *     recomputed cs = cnext - sf, a float roundtrip that is empirically but
  *     not provably exact)
- *   - selectable C (1..64), selectable prefetch depth (0..4)
+ *   - selectable C (1..64, fractional), selectable prefetch depth (0..4)
+ *   - selectable patcher: reference under-shoot or credit carry-over (v0.4)
  *   - batch encoding across threads (GIL released, one engine per doc)
  *   - snapshot save/load: full state (judge + patcher + book) <-> bytes
  *   - bounded-memory mode: map cap bits default 2^22 slots; beyond that the
@@ -49,7 +50,7 @@ static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
 #define WIN 16                  /* inline occurrence window (u16 counts) */
 #define IMAX 65535              /* max inline total (u16 window counts) */
 #define PROMOTED 0xFF           /* distinct marker: count map is author */
-#define RC_VERSION "0.3.0"
+#define RC_VERSION "0.4.0"
 #define PF_DEFAULT 2
 #define MAP_CAPBITS_DEFAULT 22
 #define ID_NONE 0xFFFFFFFFu
@@ -292,10 +293,12 @@ static int rd_get(RdBuf *r, void *dst, size_t len) {
 
 /* ----------------------------------------------------------------- core */
 typedef struct {
-    int C;                       /* patch budget, bits (1..64)            */
+    double C;                    /* patch budget, bits (1..64, fractional)*/
     int store_book;
     int pf;                      /* prefetch depth 0..4                   */
     int fast;                    /* non-exact fast lane (poly log2, tree) */
+    int pmode;                   /* 0 under-shoot (reference), 1 carry    */
+    double carry;                /* carry register (pmode==1), in [0, C]  */
     int poisoned;                /* any failed feed: state invalid        */
 
     /* judge state */
@@ -327,17 +330,18 @@ typedef struct {
     Book book;
 } RcCore;
 
-static RcCore *core_new(int C, int store_book, int pf, int prebits,
-                        int map_capbits, int fast);
+static RcCore *core_new(double C, int store_book, int pf, int prebits,
+                        int map_capbits, int fast, int pmode);
 static void core_free(RcCore *e);
 
-static RcCore *core_new(int C, int store_book, int pf, int prebits,
-                        int map_capbits, int fast) {
+static RcCore *core_new(double C, int store_book, int pf, int prebits,
+                        int map_capbits, int fast, int pmode) {
     RcCore *e = (RcCore *)calloc(1, sizeof(RcCore));
     if (!e) return NULL;
     e->C = C; e->store_book = store_book ? 1 : 0;
     e->pf = pf; e->map_capbits = (uint64_t)map_capbits;
     e->fast = fast ? 1 : 0;
+    e->pmode = pmode ? 1 : 0; e->carry = 0.0;
     e->cnt1 = (uint32_t *)calloc(256 * 256, 4);
     e->tot1 = (uint32_t *)calloc(256, 4);
     e->tot2 = (uint32_t *)calloc(65536, 4);
@@ -405,7 +409,7 @@ static void core_reset_keep(RcCore *e) {
     }
     e->tmap.n = 0; e->cmap.n = 0;
     e->patch_open = 0; e->open_start = 0; e->open_len = 0;
-    e->cs = 0.0; e->lim = 0.0;
+    e->cs = 0.0; e->lim = 0.0; e->carry = 0.0;
     e->nseen = 0; e->n_forced = 0; e->n_patches = 0;
     e->poisoned = 0;
     e->book.n = 0; e->book.alen = 0;
@@ -525,8 +529,10 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
     uint8_t *obuf = e->obuf; size_t ocap = e->ocap;
     const int sbook = e->store_book;
     uint64_t pos0 = e->nseen;
-    const int Cloc = e->C;                 /* hoisted: no per-byte reloads */
+    const double Cloc = e->C;              /* hoisted: no per-byte reloads */
     const int FST = e->fast;
+    const int CAR = e->pmode;              /* carry-over patcher mode      */
+    double carry = e->carry;
     const uint64_t mapcap = e->map_capbits;
     long frc = 0; size_t npatch = 0;
     int rc = 0;
@@ -612,7 +618,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
             const double cnext = cs + (double)sf;
             if (!patch_open) {
                 open_start = pos0 + i;
-                lim = cs + (double)Cloc;
+                lim = CAR ? cs + Cloc + carry : cs + (double)Cloc;
                 patch_open = 1; open_len = 0;
             }
             if (cnext <= lim) {
@@ -634,13 +640,19 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     if (erc) { rc = erc; goto done; }
                 }
                 cs = cnext; patch_open = 0; i++;
+                if (CAR) carry = 0.0;            /* forced escape burns carry */
             } else {                             /* close, then byte i */
                 int erc_ = emit_patch(ovs, ove, ovi, sbook, &e->book,
                                       open_start, pos0 + i, obuf, open_len,
                                       &npatch);
                 if (erc_) { rc = erc_; goto done; }
                 patch_open = 0; open_len = 0;
-                lim = cs + (double)Cloc;         /* cs == cs[pos] exactly */
+                if (CAR) {                       /* deposit unused budget */
+                    const double waste = lim - cs;
+                    carry = waste < 0.0 ? 0.0
+                          : (waste > Cloc ? Cloc : waste);
+                }
+                lim = CAR ? cs + Cloc + carry : cs + (double)Cloc;
                 open_start = pos0 + i;
                 patch_open = 1;
                 if (cnext <= lim) {
@@ -655,6 +667,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                         if (erc) { rc = erc; goto done; }
                     }
                     cs = cnext; patch_open = 0; i++;
+                    if (CAR) carry = 0.0;        /* forced escape burns carry */
                 }
             }
         }
@@ -679,6 +692,7 @@ done:
     e->tmap = tl; e->cmap = tc;
     memcpy(e->h, h, sizeof h);
     e->cs = cs; e->lim = lim; e->patch_open = patch_open;
+    e->carry = carry;
     e->open_start = open_start; e->open_len = open_len;
     e->obuf = obuf; e->ocap = ocap;
     e->nseen = pos0 + i;
@@ -713,13 +727,18 @@ static int core_flush(RcCore *e, OutVec *ovs, OutVec *ove, OutVec *ovi) {
     if (ove && ov_push(ove, (uint32_t)e->nseen) < 0) return -1;
     if (ovi && ov_push(ovi, id_) < 0) return -1;
     e->n_patches++;
+    if (e->pmode) {                        /* deposit unused budget */
+        const double waste = e->lim - e->cs;
+        e->carry = waste < 0.0 ? 0.0
+                 : (waste > e->C ? e->C : waste);
+    }
     e->patch_open = 0; e->open_len = 0;
     return 0;
 }
 
 /* ------------------------------------------- reference (v1) patcher ---- */
 /* greedy under-shoot on a stored float32 surprisal array, any C */
-static int patch_from_sur_core(const float *sur, size_t n, int C, OutVec *ov) {
+static int patch_from_sur_core(const float *sur, size_t n, double C, OutVec *ov) {
     double *cs = (double *)malloc((n + 1) * 8);
     if (!cs) return -1;
     cs[0] = 0.0;
@@ -727,11 +746,44 @@ static int patch_from_sur_core(const float *sur, size_t n, int C, OutVec *ov) {
     size_t s = 0;
     while (s < n) {
         size_t e = s;
-        double lim = cs[s] + (double)C;
+        double lim = cs[s] + C;
         for (size_t j = s + 1; j <= n; j++) {
             if (cs[j] <= lim) e = j; else break;
         }
         if (e <= s) e = s + 1;                    /* forced 1-byte escape */
+        if (ov_push(ov, (uint32_t)s) < 0) { free(cs); return -1; }
+        s = e;
+    }
+    free(cs);
+    return 0;
+}
+
+/* ------------------------- credit carry-over patcher (v0.4, pmode 1) --- */
+/* Golden spec (mirrored in tests/test_v04.py):
+ *   carry starts at 0; each patch opens with lim = cs_open + C + carry
+ *   (carry in [0, C], so the spend cap is +C extra); on close,
+ *   carry = clamp(lim - cs_close, 0, C) — the unused budget — and a
+ *   forced single-byte escape (one sur > budget) burns the carry to 0.
+ *   Telescoping: mean bits per patch -> C as the carry is bounded. */
+static int patch_from_sur_carry_core(const float *sur, size_t n, double C,
+                                     OutVec *ov) {
+    double *cs = (double *)malloc((n + 1) * 8);
+    if (!cs) return -1;
+    cs[0] = 0.0;
+    for (size_t i = 0; i < n; i++) cs[i + 1] = cs[i] + (double)sur[i];
+    size_t s = 0;
+    double carry = 0.0;
+    while (s < n) {
+        size_t e = s;
+        double lim = cs[s] + C + carry;
+        for (size_t j = s + 1; j <= n; j++) {
+            if (cs[j] <= lim) e = j; else break;
+        }
+        if (e <= s) { e = s + 1; carry = 0.0; }   /* forced escape */
+        else {
+            const double waste = lim - cs[e];
+            carry = waste < 0.0 ? 0.0 : (waste > C ? C : waste);
+        }
         if (ov_push(ov, (uint32_t)s) < 0) { free(cs); return -1; }
         s = e;
     }
@@ -744,14 +796,15 @@ static int patch_from_sur_core(const float *sur, size_t n, int C, OutVec *ov) {
 #define RCST_VERSION 1u
 
 static int save_core(RcCore *e, GrowBuf *g) {
-    uint32_t magic = RCST_MAGIC, ver = 4;
-    uint32_t C32 = (uint32_t)e->C;
+    uint32_t magic = RCST_MAGIC, ver = 5;
     uint32_t sb = (uint32_t)e->store_book, pf = (uint32_t)e->pf;
     uint32_t fz = (uint32_t)e->fast;
     uint32_t poisoned = 0;
-    if (gb_u32(g, &magic) || gb_u32(g, &ver) || gb_u32(g, &C32) ||
+    uint8_t pm8 = (uint8_t)e->pmode;
+    if (gb_u32(g, &magic) || gb_u32(g, &ver) || gb_f64(g, &e->C) ||
         gb_u32(g, &sb) || gb_u32(g, &pf) || gb_u32(g, &fz) ||
-        gb_u32(g, &poisoned)) return -1;
+        gb_u32(g, &poisoned) ||
+        gb_u8(g, &pm8) || gb_f64(g, &e->carry)) return -1;
     if (gb_u64(g, &e->nseen) || gb_u64(g, &e->n_forced) ||
         gb_u64(g, &e->n_patches)) return -1;
     /* patcher state */
@@ -813,16 +866,28 @@ static int save_core(RcCore *e, GrowBuf *g) {
 
 static RcCore *load_core(const uint8_t *p, size_t n) {
     RdBuf r = { p, n, 0, 0 };
-    uint32_t magic = 0, ver = 0, C = 0, sb = 0, pf = 0, fz = 0, poisoned = 0;
-    if (rd_u32(&r, &magic) || rd_u32(&r, &ver) ||
-        rd_u32(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf)) return NULL;
-    if (ver >= 4) {
-        if (rd_u32(&r, &fz)) return NULL;
+    uint32_t magic = 0, ver = 0, C32 = 0, sb = 0, pf = 0, fz = 0, poisoned = 0;
+    double C = 20.0, carry = 0.0;
+    uint8_t pmode = 0;
+    if (rd_u32(&r, &magic) || rd_u32(&r, &ver)) return NULL;
+    if (ver == 5) {                  /* v5: fractional C + carry mode */
+        if (rd_f64(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
+            rd_u32(&r, &fz) || rd_u32(&r, &poisoned) ||
+            rd_u8(&r, &pmode) || rd_f64(&r, &carry)) return NULL;
+    } else {                         /* v2..v4 legacy: integer C */
+        if (rd_u32(&r, &C32) || rd_u32(&r, &sb) || rd_u32(&r, &pf)) return NULL;
+        if (ver >= 4) {
+            if (rd_u32(&r, &fz)) return NULL;
+        }
+        if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
+        C = (double)C32;
     }
-    if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
-    if (magic != RCST_MAGIC || ver < 2 || ver > 4) return NULL;
-    RcCore *e = core_new((int)C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT, (int)fz);
+    if (magic != RCST_MAGIC || ver < 2 || ver > 5) return NULL;
+    if (!(C >= 1.0 && C <= 64.0)) return NULL;
+    RcCore *e = core_new(C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT,
+                         (int)fz, (int)pmode);
     if (!e) return NULL;
+    e->carry = carry;
     if (rd_u64(&r, &e->nseen) || rd_u64(&r, &e->n_forced) ||
         rd_u64(&r, &e->n_patches)) goto fail;
     uint8_t po = 0;
@@ -981,18 +1046,20 @@ static void Engine_dealloc(EngineObj *self) {
 }
 
 static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
-    int C = 20, store_book = 1, pf = -1, prebits = 16;
+    double C = 20.0;
+    int store_book = 1, pf = -1, prebits = 16;
     int map_capbits = MAP_CAPBITS_DEFAULT;
-    int fast = 0;
+    int fast = 0, carry = 0;
     static char *kwlist[] = {"c", "store_book", "pf", "prebits",
-                             "map_capbits", "exact", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ipiiii", kwlist,
+                             "map_capbits", "exact", "carry", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|dpiiiii", kwlist,
                                      &C, &store_book, &pf, &prebits,
-                                     &map_capbits, &fast))
+                                     &map_capbits, &fast, &carry))
         return NULL;
     fast = fast ? 0 : 1;   /* kwarg is `exact` (default true); fast = !exact */
-    if (C < 1 || C > 64) {
-        PyErr_SetString(PyExc_ValueError, "c must be in 1..64"); return NULL;
+    if (!(C >= 1.0 && C <= 64.0)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "c must be in 1..64 (fractional ok)"); return NULL;
     }
     if (pf < -1 || pf > 4) {
         PyErr_SetString(PyExc_ValueError, "pf must be -1..4"); return NULL;
@@ -1005,7 +1072,7 @@ static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
     if (!self) return NULL;
     self->busy = 0;
     self->core = core_new(C, store_book, pf < 0 ? PF_DEFAULT : pf,
-                          prebits, map_capbits, fast);
+                          prebits, map_capbits, fast, carry ? 1 : 0);
     if (!self->core) { Py_DECREF(self); return PyErr_NoMemory(); }
     return (PyObject *)self;
 }
@@ -1229,7 +1296,13 @@ static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
 
 /* getset */
 static PyObject *gs_c(EngineObj *self, void *c) {
-    return PyLong_FromLong(self->core->C);
+    return PyFloat_FromDouble(self->core->C);
+}
+static PyObject *gs_carry(EngineObj *self, void *c) {
+    return PyFloat_FromDouble(self->core->carry);
+}
+static PyObject *gs_carry_mode(EngineObj *self, void *c) {
+    return PyBool_FromLong(self->core->pmode);
 }
 static PyObject *gs_store_book(EngineObj *self, void *c) {
     return PyBool_FromLong(self->core->store_book);
@@ -1250,9 +1323,11 @@ static PyObject *gs_n_forced(EngineObj *self, void *c) {
     return PyLong_FromUnsignedLongLong(self->core->n_forced);
 }
 static PyObject *gs_repr(EngineObj *self) {
+    char cbuf[32];
+    snprintf(cbuf, sizeof cbuf, "%g", self->core->C);
     return PyUnicode_FromFormat(
-        "Engine(c=%d, store_book=%d, pf=%d, bytes_seen=%llu, book=%llu)",
-        self->core->C, self->core->store_book, self->core->pf,
+        "Engine(c=%s, store_book=%d, pf=%d, bytes_seen=%llu, book=%llu)",
+        cbuf, self->core->store_book, self->core->pf,
         (unsigned long long)self->core->nseen,
         (unsigned long long)(self->core->store_book ? self->core->book.n : 0));
 }
@@ -1279,7 +1354,9 @@ static PyMethodDef Engine_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 static PyGetSetDef Engine_getset[] = {
-    {"c",          (getter)gs_c,          NULL, "patch budget (bits)", NULL},
+    {"c",          (getter)gs_c,          NULL, "patch budget (bits, fractional ok)", NULL},
+    {"carry",      (getter)gs_carry,      NULL, "carry register value (carry mode)", NULL},
+    {"carry_mode", (getter)gs_carry_mode, NULL, "credit carry-over patcher enabled", NULL},
     {"store_book", (getter)gs_store_book, NULL, "book enabled", NULL},
     {"pf",         (getter)gs_pf,         NULL, "prefetch depth", NULL},
     {"book_size",  (getter)gs_book_size,  NULL, "distinct patches in book", NULL},
@@ -1305,7 +1382,7 @@ static PyTypeObject Engine_Type = {
 typedef struct {
     const uint8_t *data; size_t n;
     uint32_t *out; size_t nout;
-    int c, prebits, err, fast;
+    double c; int prebits, err, fast, carry;
 } BJob;
 typedef struct { BJob *jobs; int njobs; atomic_int next; } BPool;
 
@@ -1316,7 +1393,7 @@ static void *bworker(void *argp) {
         if (idx >= p->njobs) break;
         BJob *j = &p->jobs[idx];
         RcCore *core = core_new(j->c, 0, PF_DEFAULT, j->prebits,
-                                MAP_CAPBITS_DEFAULT, j->fast);
+                                MAP_CAPBITS_DEFAULT, j->fast, j->carry);
         if (!core) { j->err = 1; continue; }
         OutVec ov; ov_init(&ov);
         int rc = core_run(core, j->data, j->n, 1, NULL, &ov, NULL, NULL);
@@ -1330,18 +1407,20 @@ static void *bworker(void *argp) {
 
 static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *docs;
-    int c = 20, threads = 0, fz = 0;
-    static char *kwlist[] = {"docs", "c", "threads", "fast", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|iii", kwlist,
-                                     &docs, &c, &threads, &fz))
+    double c = 20.0;
+    int threads = 0, fz = 0, carry = 0;
+    static char *kwlist[] = {"docs", "c", "threads", "fast", "carry", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|diii", kwlist,
+                                     &docs, &c, &threads, &fz, &carry))
         return NULL;
     PyObject *fast = PySequence_Fast(docs, "docs must be a sequence");
     if (!fast) return NULL;
     Py_ssize_t nd = PySequence_Fast_GET_SIZE(fast);
     if (nd == 0) { Py_DECREF(fast); return PyList_New(0); }
-    if (c < 1 || c > 64) {
+    if (!(c >= 1.0 && c <= 64.0)) {
         Py_DECREF(fast);
-        PyErr_SetString(PyExc_ValueError, "c must be in 1..64"); return NULL;
+        PyErr_SetString(PyExc_ValueError,
+                        "c must be in 1..64 (fractional ok)"); return NULL;
     }
     Py_buffer *views = (Py_buffer *)calloc((size_t)nd, sizeof(Py_buffer));
     BJob *jobs = (BJob *)calloc((size_t)nd, sizeof(BJob));
@@ -1358,6 +1437,7 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
         jobs[k].n = (size_t)views[k].len;
         jobs[k].c = c;
         jobs[k].fast = fz;
+        jobs[k].carry = carry ? 1 : 0;
         size_t n = jobs[k].n;
         int bits = 12;
         while ((1ull << bits) < 6 * n && bits < 23) bits++;
@@ -1418,17 +1498,24 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     return out;
 }
 
-static PyObject *rc_patch_from_sur(PyObject *self, PyObject *args) {
+static PyObject *rc_patch_from_sur(PyObject *self, PyObject *args,
+                                   PyObject *kwds) {
     Py_buffer view;
-    int c;
-    if (!PyArg_ParseTuple(args, "y*i", &view, &c)) return NULL;
-    if (c < 1 || c > 64) {
+    double c = 20.0;
+    int carry = 0;
+    static char *kwlist[] = {"sur", "c", "carry", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "y*|dp", kwlist,
+                                     &view, &c, &carry)) return NULL;
+    if (!(c >= 1.0 && c <= 64.0)) {
         PyBuffer_Release(&view);
-        PyErr_SetString(PyExc_ValueError, "c must be in 1..64"); return NULL;
+        PyErr_SetString(PyExc_ValueError,
+                        "c must be in 1..64 (fractional ok)"); return NULL;
     }
     size_t n = (size_t)view.len / 4;
     OutVec ov; ov_init(&ov);
-    int rc = patch_from_sur_core((const float *)view.buf, n, c, &ov);
+    int rc = carry
+        ? patch_from_sur_carry_core((const float *)view.buf, n, c, &ov)
+        : patch_from_sur_core((const float *)view.buf, n, c, &ov);
     PyBuffer_Release(&view);
     PyObject *out = NULL;
     if (rc == 0) {
@@ -1464,13 +1551,15 @@ static PyObject *rc_version(PyObject *self, PyObject *Py_UNUSED(ig)) {
 static PyMethodDef rc_methods[] = {
     {"batch", (PyCFunction)(void (*)(void))rc_batch,
      METH_VARARGS | METH_KEYWORDS,
-     "batch(docs, c=20, threads=0) -> [starts_bytes, ...]\n"
+     "batch(docs, c=20, threads=0, fast=False, carry=False) -> [starts_bytes, ...]\n"
      "Encode many independent documents in parallel (GIL released, one cold\n"
      "engine per doc). Each entry is a little-endian uint32 array of patch\n"
      "starts (patch k = [start_k, start_{k+1}))."},
-    {"patch_from_sur", rc_patch_from_sur, METH_VARARGS,
-     "patch_from_sur(sur_f32le, c) -> starts_bytes (uint32 LE)\n"
-     "Reference greedy under-shoot patcher on a stored surprisal array."},
+    {"patch_from_sur", (PyCFunction)(void (*)(void))rc_patch_from_sur,
+     METH_VARARGS | METH_KEYWORDS,
+     "patch_from_sur(sur_f32le, c, carry=False) -> starts_bytes (uint32 LE)\n"
+     "Reference patcher on a stored surprisal array: greedy under-shoot\n"
+     "(default) or credit carry-over (carry=True), any fractional c."},
     {"load_state", rc_load_state, METH_O,
      "load_state(bytes) -> Engine (restores judge+patcher+book)."},
     {"version", rc_version, METH_NOARGS, "library version."},
@@ -1517,12 +1606,13 @@ int main(int argc, char **argv) {
     uint8_t *buf = (uint8_t *)malloc((size_t)n);
     if (fread(buf, 1, (size_t)n, f) != (size_t)n) return 2;
     fclose(f);
-    int C = atoi(argv[2]), pf = atoi(argv[3]), prebits = atoi(argv[4]);
+    double C = atof(argv[2]);
+    int pf = atoi(argv[3]), prebits = atoi(argv[4]);
     int reps = atoi(argv[5]);
     int fastarg = (argc > 6) ? atoi(argv[6]) : 0;
     double inv_dummy = 0; (void)inv_dummy;
     for (int r = -1; r < reps; r++) {
-        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT, fastarg);
+        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT, fastarg, 0);
         core_reserve(core, (size_t)n);
         OutVec ov; ov_init(&ov);
         struct timespec ts0, ts1;

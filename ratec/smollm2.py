@@ -75,11 +75,11 @@ class RateCTokenizer(PreTrainedTokenizer):
     vocab_files_names = {_SNAP_FILE: _SNAP_FILE}
     model_input_names = ["input_ids", "attention_mask"]
 
-    def __init__(self, snapshot=None, c: int = 20, **kwargs):
+    def __init__(self, snapshot=None, c: float = 20, **kwargs):
         # ---- engine + frozen book (must exist before super().__init__,
         # ---- which adds special tokens and calls get_vocab/vocab_size)
         if snapshot is None:
-            self._engine = _rc.Engine(c=int(c), store_book=True)
+            self._engine = _rc.Engine(c=float(c), store_book=True)
             self._snapshot_bytes = None
         elif isinstance(snapshot, (bytes, bytearray)):
             self._snapshot_bytes = bytes(snapshot)

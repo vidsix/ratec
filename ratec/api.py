@@ -31,10 +31,11 @@ class RateC:
 
     Parameters
     ----------
-    c : int
-        Patch budget in bits (default 20). Smaller C -> shorter patches and
-        more of them; larger C -> longer patches. Changeable per instance;
-        the judge is C-independent.
+    c : float
+        Patch budget in bits (default 20; fractional values like 17.5 are
+        allowed). Smaller C -> shorter patches and more of them; larger C ->
+        longer patches. The judge is C-independent, so the choice is purely
+        downstream (embedding width, context budget).
     store_book : bool
         Keep the dynamic patch book (content -> id) so `encode`/`decode`
         round-trip without the source text. Turn off for bulk LM data prep
@@ -55,12 +56,12 @@ class RateC:
       `ratec.batch_spans` for parallel bulk work.
     """
 
-    def __init__(self, c: int = 20, store_book: bool = True, pf: int = -1,
+    def __init__(self, c: float = 20, store_book: bool = True, pf: int = -1,
                  warm_state=None, prebits: int = 16, map_capbits: int = 22,
-                 exact: bool = True):
+                 exact: bool = True, carry: bool = False):
         self._eng = _rc.Engine(c=c, store_book=store_book, pf=pf,
                                prebits=prebits, map_capbits=map_capbits,
-                               exact=exact)
+                               exact=exact, carry=carry)
         if warm_state is not None:
             state = warm_state
             if isinstance(state, str):
@@ -128,7 +129,8 @@ class RateC:
         # 1) sequential head on a private engine; it emits its own spans and
         #    the snapshot (taken after flush) seeds the parallel workers
         eng_head = _rc.Engine(c=self.c, store_book=False,
-                              pf=self._eng.pf, exact=True)
+                              pf=self._eng.pf, exact=True,
+                              carry=self._eng.carry_mode)
         out = []
         consumed = 0
         for k in range(head):
@@ -216,8 +218,18 @@ class RateC:
 
     # -------------------------------------------------------------- misc
     @property
-    def c(self) -> int:
+    def c(self) -> float:
         return self._eng.c
+
+    @property
+    def carry(self) -> float:
+        """Current carry-over register value (0 unless carry mode)."""
+        return self._eng.carry
+
+    @property
+    def carry_mode(self) -> bool:
+        """True when the credit carry-over patcher is active."""
+        return bool(self._eng.carry_mode)
 
     @property
     def book_size(self) -> int:
@@ -259,18 +271,130 @@ def _maybe_decompress(raw: bytes) -> bytes:
     return raw
 
 
-def patch_from_sur(sur: np.ndarray | bytes, c: int) -> np.ndarray:
-    """Reference greedy under-shoot patcher over a stored surprisal array.
+def patch_from_sur(sur: np.ndarray | bytes, c: float,
+                   carry: bool = False) -> np.ndarray:
+    """Reference patcher over a stored surprisal array.
 
     The patcher is C-independent of the judge, so one `surprise()` pass
-    serves every C — this is the cheap way to run C sweeps.
+    serves every C — this is the cheap way to run C sweeps. `c` may be
+    fractional (e.g. 17.5). `carry=True` selects the credit carry-over
+    patcher (v0.4): each patch may spend the previous patch's unused
+    budget (capped at +C extra); the long-run rate converges to exactly
+    C bits/patch.
     """
     raw = sur.tobytes() if isinstance(sur, np.ndarray) else bytes(sur)
-    return np.frombuffer(_rc.patch_from_sur(raw, int(c)), dtype=np.uint32)
+    return np.frombuffer(_rc.patch_from_sur(raw, float(c), bool(carry)),
+                         dtype=np.uint32)
 
 
-def batch_spans(docs: Sequence, c: int = 20, threads: int = 0,
-                fast: bool = False):
+def solve_c(data, target_patches: int, lo: float = 1.0, hi: float = 64.0,
+            carry: bool = False, max_probes: int = 40) -> tuple[float, int]:
+    """Rate servo: find the C whose patch count hits `target_patches`.
+
+    Patch count is strictly monotone decreasing in C, so this is an exact
+    bisection. The judge pass runs ONCE (it is C-independent); every
+    candidate C then costs only the cheap re-patch (`patch_from_sur`),
+    so the sweep is nearly free compared to re-ingesting the corpus.
+
+    Returns (c, achieved_patch_count) — the count is exact for the
+    returned C. For a BOOK-SIZE target (frozen-vocab donor match) use
+    `solve_c_for_book`; note book size <= patch count (repeated contents
+    share one entry).
+    """
+    data = _as_bytes(data)
+    if target_patches <= 0:
+        raise ValueError("target_patches must be positive")
+    if not (1.0 <= lo < hi <= 64.0):
+        raise ValueError("need 1.0 <= lo < hi <= 64.0")
+    sur = RateC(c=lo, store_book=False).surprise(data)
+
+    def patches_at(c: float) -> int:
+        return int(len(patch_from_sur(sur, c, carry=carry)))
+
+    lo_c, hi_c = float(lo), float(hi)
+    lo_n, hi_n = patches_at(lo_c), patches_at(hi_c)
+    if lo_n <= target_patches:          # even the smallest C gives fewer
+        return lo_c, lo_n
+    if hi_n >= target_patches:          # even the largest C gives more
+        return hi_c, hi_n
+    for _ in range(max_probes):
+        mid = 0.5 * (lo_c + hi_c)
+        if mid <= lo_c or mid >= hi_c:
+            break
+        n = patches_at(mid)
+        if n > target_patches:
+            lo_c, lo_n = mid, n
+        else:
+            hi_c, hi_n = mid, n
+        if hi_c - lo_c < 1e-9:
+            break
+    # return whichever bracket side landed closer to the target
+    if abs(lo_n - target_patches) <= abs(hi_n - target_patches):
+        return lo_c, lo_n
+    return hi_c, hi_n
+
+
+def solve_c_for_book(data, target_book: int, lo: float = 1.0,
+                     hi: float = 64.0, carry: bool = False,
+                     coarse_steps: int = 32,
+                     max_probes: int = 24) -> tuple[float, int]:
+    """Rate servo for frozen-vocab targets: find C with book size ≈ target.
+
+    "Tokenize this corpus so the frozen book has exactly N entries" —
+    the donor-vocab match for transplants. Book size vs C is UNIMODAL
+    (→ 256 distinct single bytes as C→1; peaks mid-range where patches
+    are diverse but repeated; falls back toward the patch count as C
+    grows and patches become long and unique), so this does a coarse
+    ascending scan for the rising bracket around the target, then a
+    local bisection. Returns (c, achieved_book); the achieved value is
+    exact for the returned C, the match is as close as book(C) allows.
+    """
+    data = _as_bytes(data)
+    if target_book <= 0:
+        raise ValueError("target_book must be positive")
+    if not (1.0 <= lo < hi <= 64.0):
+        raise ValueError("need 1.0 <= lo < hi <= 64.0")
+    n = len(data)
+    sur = RateC(c=lo, store_book=False).surprise(data)
+
+    def book_at(c: float) -> int:
+        starts = patch_from_sur(sur, c, carry=carry)
+        edges = np.append(starts.astype(np.int64), n)
+        seen = set()
+        for k in range(len(edges) - 1):
+            seen.add(data[edges[k]:edges[k + 1]])
+        return len(seen)
+
+    grid = [lo + (hi - lo) * k / (coarse_steps - 1)
+            for k in range(coarse_steps)]
+    vals = [book_at(c) for c in grid]
+    best_v, best_c = max(zip(vals, grid))
+    if vals[0] >= target_book:
+        return grid[0], vals[0]
+    if best_v < target_book:            # target above the attainable peak
+        return best_c, best_v
+    for k in range(1, coarse_steps):
+        if vals[k] >= target_book > vals[k - 1]:
+            a, fa, b, fb = grid[k - 1], vals[k - 1], grid[k], vals[k]
+            for _ in range(max_probes):
+                mid = 0.5 * (a + b)
+                if mid <= a or mid >= b:
+                    break
+                fm = book_at(mid)
+                if fm < target_book:
+                    a, fa = mid, fm
+                else:
+                    b, fb = mid, fm
+                if b - a < 1e-4:
+                    break
+            if abs(fb - target_book) <= abs(fa - target_book):
+                return b, fb
+            return a, fa
+    return best_c, best_v
+
+
+def batch_spans(docs: Sequence, c: float = 20, threads: int = 0,
+                fast: bool = False, carry: bool = False):
     """Parallel rate-patching of independent byte documents.
 
     Returns a list of (starts ndarray uint32, n_bytes); patch k spans
@@ -279,8 +403,8 @@ def batch_spans(docs: Sequence, c: int = 20, threads: int = 0,
     store_book=False)` per doc, across all cores. `fast=True` uses the
     non-exact fast lane (see RateC(exact=False)).
     """
-    raws = _rc.batch([bytes(d) for d in docs], c=int(c), threads=threads,
-                     fast=bool(fast))
+    raws = _rc.batch([bytes(d) for d in docs], c=float(c), threads=threads,
+                     fast=bool(fast), carry=bool(carry))
     return [(np.frombuffer(raw, dtype=np.uint32), len(d))
             for raw, d in zip(raws, docs)]
 

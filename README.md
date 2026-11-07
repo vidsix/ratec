@@ -6,10 +6,11 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.3.0, experimental. The C core and byte-level semantics are
+> **Status:** v0.4.0, experimental. The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the LM-side surface (`ratec.smollm2`)
-> is new and may still move. Code-first repo: run `tests/` and `bench/`
-> yourself — no benchmark claims against SOTA in this README.
+> and the patcher modes/servos are new and may still move. Code-first
+> repo: run `tests/` and `bench/` yourself — no benchmark claims against
+> SOTA in this README.
 
 ```
 pip install .            # C extension, gcc >= 9, x86-64 (or any 64-bit)
@@ -110,6 +111,34 @@ Key properties: any text round-trips **byte-exactly** with a frozen vocab;
 `encode_for_lm` is the MegaByte/BLT-style `(id, byte_length)` contract;
 special tokens live in a reserved id block that never collides with the book.
 
+## v0.4: fractional C, carry-over patcher, servo, profiles
+
+```python
+import ratec
+from ratec import patch_from_sur, solve_c, solve_c_for_book
+from ratec.profiles import apply, restore
+
+tok = ratec.RateC(c=17.5)                # fractional C — the budget is a float
+ratec.RateC(c=20, carry=True)            # credit carry-over patcher (opt-in):
+                                         # each patch may spend the previous
+                                         # patch's unused budget (cap +C);
+                                         # mean rate -> C exactly. Measured
+                                         # -15.1% patches at C=20 (mixed).
+
+c, n = solve_c(corpus, 50_000)           # servo: C for a patch-count target
+c, b = solve_c_for_book(corpus, 16_384)  # servo: C for a book-size target
+                                         # (frozen-vocab donor match)
+
+t = apply("pcm16", pcm_bytes)            # modality profiles: lossless byte
+restore("pcm16", t) == pcm_bytes         # transforms upstream, core untouched;
+                                         # -37% patches on PCM, -9.5% on f32
+```
+
+Patch counts and MB/s are measured together in `bench/bench_c_sweep.py`;
+the carry/deferred-performance record (incl. why the SIMD patcher is a
+5.5%-ceiling defer) lives in `docs/v04_design.md`. Container spec draft:
+`docs/container.md`.
+
 ## Semantics (the precise bits)
 
 * **Judge.** Fixed-weight mixture of six adaptive KT estimators over byte
@@ -198,6 +227,17 @@ paths to raw speed.
    budget, RateC vs BPE vs raw bytes, measured on BPB / params /
    FLOPs-per-byte; tokenizer ecosystem bridges (GGUF/llama.cpp, vLLM)
    once the training side settles.
+6. **~~Fractional C~~ done** — double C everywhere, snapshot v5.
+7. **~~Credit carry-over patcher~~ done** — `carry=True`; −15.1% patches
+   at C=20, mean rate → C exactly, streaming bit-exact.
+8. **~~Rate servo~~ done** — `solve_c` (exact, patch-count target) and
+   `solve_c_for_book` (unimodal target, coarse+refine).
+9. **~~Modality profiles~~ done** — `ratec.profiles`, registry-as-data,
+   lossless transforms (pcm16 −37.1% patches, f32 −9.5%, image −9.6%).
+10. **SIMD prefix-sum patcher / run-detection fast path** — measured and
+    deferred: the patcher is 5.5% of runtime and the judge's orders-3..5
+    probes are fused predict+update (an exact skip cannot avoid them).
+    Numbers and the revisit conditions are in `docs/v04_design.md`.
 
 ## Layout
 
@@ -206,10 +246,14 @@ ratec/
   _rcengine.c        the whole C core (engine, book, batch, snapshots)
   api.py / cli.py    pythonic surface + CLI
   smollm2.py         HF tokenizer (frozen vocab) + SmolLM2 config builder
+  profiles.py        modality profiles: lossless transforms + registry
 tests/
   gate_bitexact.py   bitwise gate vs the validated reference
   test_ratec.py      40+ checks: round-trips (text/binary), streaming
                      parity, C sweep, batch, book, snapshots, errors
+  test_v04.py        fractional C, carry patcher (vs python golden),
+                     snapshot v5 + v4 back-compat, servos
+  test_profiles.py   profile round-trips + predictability wins
   test_smollm2_port.py   freeze / roundtrip / fallback / specials / config
 bench/
   bench_vs_tiktoken.py   fertility table above, reproducible
@@ -217,6 +261,8 @@ bench/
 docs/
   smollm2_port.md    the LM port, precisely
   PROFILING.md       the ablation profile behind the v2 engine
+  v04_design.md      what landed / was measured / was declined, with numbers
+  container.md       container format spec (draft v0.1)
 ```
 
 Rebuild in place:

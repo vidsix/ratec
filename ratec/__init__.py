@@ -10,8 +10,8 @@ vocab files, any C, any byte stream (text, code, CJK, images, audio, ...).
     >>> tok.decode(tok.encode("你好, hello!")) == "你好, hello!"
     True
 """
-from .api import (RateC, RatecError, patch_from_sur, batch_spans,
-                  __version__)
+from .api import (RateC, RatecError, patch_from_sur, batch_spans, solve_c,
+                  solve_c_for_book, __version__)
 
-__all__ = ["RateC", "RatecError", "patch_from_sur", "batch_spans",
-           "__version__"]
+__all__ = ["RateC", "RatecError", "patch_from_sur", "batch_spans", "solve_c",
+           "solve_c_for_book", "__version__"]
