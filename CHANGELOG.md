@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — twin-study training-scale probe
+
+The singleton-starvation hypothesis (v0.4.1 finding) makes a testable
+prediction: more training steps ⇒ more samples per patch type ⇒ the
+BPE-vs-RateC gap narrows. Measured (same arms/arch/seed/bytes, 4× steps,
+OneCycle recomputed, identical full-coverage eval):
+
+- bpe 3.112 → **2.607** BPB (−0.505, −16.2%)
+- ratec_direct 4.796 → **3.818** BPB (−0.978, −20.4%)
+- tokenization gap **1.684 → 1.212 BPB (−28.1%)**; RateC improved
+  **1.94× more** than BPE for the same 4× compute
+- gap narrowed in every domain: en −25.1%, hr −23.6%, zh −35.5%,
+  code −31.1% relative
+
+Direction confirmed; trend not established (two points, 1.27M params, gap
+still large). `bytes` and factorized-`ratec` arms not re-run at this scale.
+Digest: `research/twin_probe_s2400.json`; record: `docs/twin_study.md`.
+
 ## v0.4.1 — 2026-11 (external-replication round)
 
 Shipped after an independent third-party replication of v0.4.0 (fresh box,

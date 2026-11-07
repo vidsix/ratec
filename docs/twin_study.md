@@ -66,10 +66,39 @@ isolates the interface cost from the tokenization cost.
    patch type — directly tests finding 3), frequency-aware book pruning,
    and a C sweep for the LM optimum (not the tokenizer optimum).
 
+## Training-scale probe (2400 steps, post-v0.4.1)
+
+Directly tests finding 3: same two matched-params arms, same everything,
+**4× the training steps** (2400; OneCycle schedule recomputed for the longer
+run; seed 42; identical bytes; identical full-coverage eval).
+
+| arm | BPB @600 | BPB @2400 | improvement |
+|---|---|---|---|
+| bpe | 3.112 | 2.607 | −0.505 (−16.2%) |
+| ratec_direct | 4.796 | 3.818 | **−0.978 (−20.4%)** |
+| **gap** | **1.684** | **1.212** | **−28.1%** |
+
+- RateC improved **1.94× more** than BPE for the same 4× compute.
+- The gap narrowed in **every domain**: en 1.828→1.370 (−25%), hr
+  1.649→1.260 (−24%), zh 1.951→1.257 (−36%), code 1.332→0.918 (−31%).
+- Honest framing: two points show **direction, not a trend line**. The gap
+  is still large (1.21 BPB — BPE still wins decisively at 1.27M params),
+  and the `bytes` / factorized-`ratec` arms were not re-run at this scale.
+  But the direction is exactly what the singleton-starvation hypothesis
+  predicts: 4× steps ≈ 4× samples per patch type.
+
+Artifacts: `research/twin_probe_s2400.json` (digest), plus per-arm JSONs,
+curves and checkpoints in the authoring workspace
+(`runs/twin_*_s2400.*`).
+
 ## Artifacts
 
-- `research/twin_summary.json` — machine-readable digest of the result above.
-- `research/twin_study.py` — the exact harness (arch, streams, eval). It
+- `research/twin_summary.json` — machine-readable digest of the 600-step
+  result above.
+- `research/twin_probe_s2400.json` — machine-readable digest of the
+  2400-step training-scale probe.
+- `research/twin_study.py` — the exact harness (arch, streams, eval,
+  checkpoint-resume for long runs). It
   reads workspace-local tokenized streams (`runs/ratec_main_*` /
   `runs/bpe_mix_*` .npy) and is published here so the protocol is
   auditable line-by-line; the full per-arm JSONs/curves and checkpoints

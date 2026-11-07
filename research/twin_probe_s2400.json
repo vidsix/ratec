@@ -1,0 +1,55 @@
+{
+  "protocol": {
+    "what": "training-scale probe on the twin study: same arms/arch/seed/bytes, 4x steps",
+    "arms": [
+      "bpe",
+      "ratec_direct"
+    ],
+    "changed": {
+      "steps": 2400,
+      "was": 600
+    },
+    "held_fixed": "d=96 layers=3 heads=4 ctx=256 batch=16 lr=3e-4 OneCycle(seed-42 schedule recomputed for 2400), identical 15,811,609-B train / 659,473-B val bytes, seed 42, full-coverage byte-weighted BPB",
+    "not_rerun": "bytes and ratec(factorized) arms were not re-run at 2400 steps; their 600-step numbers stand",
+    "artifacts": [
+      "runs/twin_bpe_s2400.json",
+      "runs/twin_ratec_direct_s2400.json",
+      "runs/twin_{bpe,ratec_direct}_s2400.pt"
+    ]
+  },
+  "results": {
+    "bpe": {
+      "bpb_600": 3.1116900979595763,
+      "bpb_2400": 2.606764106858485,
+      "per_domain_2400": {
+        "en": 2.331840736604606,
+        "hr": 2.558856436125041,
+        "zh": 2.9984639063933773,
+        "code": 2.8193492649613856
+      }
+    },
+    "ratec_direct": {
+      "bpb_600": 4.7958353435220165,
+      "bpb_2400": 3.8182689059814434,
+      "per_domain_2400": {
+        "en": 3.701576713389554,
+        "hr": 3.818930458431156,
+        "zh": 4.255880543225381,
+        "code": 3.7373489406826037
+      }
+    },
+    "gap_bpb": {
+      "at_600": 1.6841452455624402,
+      "at_2400": 1.2115047991229586,
+      "narrowing_pct": 28.06411428496701
+    },
+    "ratec_improved_x_times_more": 1.9360588576729731
+  },
+  "findings": [
+    "the tokenization gap narrows with training scale: 1.684 -> 1.212 BPB (-28.1%) from 600 to 2400 steps",
+    "ratec_direct improved 1.93x more BPB than bpe for the same 4x compute (-0.978 vs -0.505)",
+    "gap narrowed in every domain: en -25.1%, hr -23.6%, zh -35.5%, code -31.1% (zh narrows most)",
+    "direction confirmed, trend not established: two points, tiny model (1.27M params), gap still large (1.21 BPB) - bpe still wins decisively at this scale",
+    "consistent with the singleton-starvation hypothesis: 4x steps roughly quadruples samples per patch type"
+  ]
+}

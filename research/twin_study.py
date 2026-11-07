@@ -226,6 +226,9 @@ def main():
     ap.add_argument("--tag", default="",
                     help="output suffix, e.g. --tag _s2400 -> runs/twin_bpe_s2400.json "
                          "(empty keeps the canonical 600-step artifact names)")
+    ap.add_argument("--ckpt_every", type=int, default=50,
+                    help="save a resumable checkpoint every N steps "
+                         "(runs/twin_{kind}{tag}.ckpt)")
     args = ap.parse_args()
 
     torch.manual_seed(42)
@@ -268,26 +271,55 @@ def main():
 
     rng = np.random.default_rng(42)
     curve = []
+    start_step = 0
+    ckpt_path = f"{RUNS}/twin_{args.kind}{args.tag}.ckpt"
+    if os.path.exists(ckpt_path):
+        ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(ck["model"])
+        opt.load_state_dict(ck["opt"])
+        sched.load_state_dict(ck["sched"])
+        torch.set_rng_state(ck["torch_rng"])
+        rng.bit_generator.state = ck["np_rng"]
+        curve = ck.get("curve", [])
+        start_step = ck["step"]
+        print(f"[{args.kind}] resumed from {ckpt_path} at step {start_step}",
+              flush=True)
+
+    def save_ckpt(step):
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
+                    "sched": sched.state_dict(), "step": step,
+                    "torch_rng": torch.get_rng_state(),
+                    "np_rng": rng.bit_generator.state, "curve": curve},
+                   ckpt_path)
+
     t0 = time.time()
-    for step in range(1, args.steps + 1):
-        offs = rng.integers(0, len(tr_ids) - args.ctx - 1, size=args.batch)
-        x = torch.stack([torch.from_numpy(
-            tr_ids[o:o + args.ctx].astype(np.int64)) for o in offs])
-        y = torch.stack([torch.from_numpy(
-            tr_ids[o + 1:o + args.ctx + 1].astype(np.int64)) for o in offs])
-        logits = model(x)
-        loss = F.cross_entropy(logits.reshape(-1, model.vocab), y.reshape(-1))
-        opt.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        opt.step()
-        sched.step()
-        if step % 50 == 0 or step == 1:
-            bpb = eval_quick(model, None, va_ids, va_lens, args.ctx)
-            curve.append({"step": step, "val_bpb_quick": bpb})
-            el = time.time() - t0
-            print(f"  step {step}/{args.steps} loss {float(loss):.4f} "
-                  f"quickBPB {bpb:.4f} ({el:.0f}s)", flush=True)
+    try:
+        for step in range(start_step + 1, args.steps + 1):
+            offs = rng.integers(0, len(tr_ids) - args.ctx - 1, size=args.batch)
+            x = torch.stack([torch.from_numpy(
+                tr_ids[o:o + args.ctx].astype(np.int64)) for o in offs])
+            y = torch.stack([torch.from_numpy(
+                tr_ids[o + 1:o + args.ctx + 1].astype(np.int64)) for o in offs])
+            logits = model(x)
+            loss = F.cross_entropy(logits.reshape(-1, model.vocab), y.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            sched.step()
+            if step % 50 == 0 or step == 1:
+                bpb = eval_quick(model, None, va_ids, va_lens, args.ctx)
+                curve.append({"step": step, "val_bpb_quick": bpb})
+                el = time.time() - t0
+                print(f"  step {step}/{args.steps} loss {float(loss):.4f} "
+                      f"quickBPB {bpb:.4f} ({el:.0f}s)", flush=True)
+            if step % args.ckpt_every == 0 or step == args.steps:
+                save_ckpt(step)
+    except KeyboardInterrupt:
+        save_ckpt(step)
+        print(f"[{args.kind}] interrupted at step {step} — checkpoint saved "
+              f"({ckpt_path}); rerun with the same args to resume", flush=True)
+        raise SystemExit(2)
 
     wall = time.time() - t0
     va_flat = np.concatenate(va_ids)

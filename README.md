@@ -54,7 +54,11 @@ ratec.RateC(c=20, store_book=False)      \
 
 Fertility (units per byte, C=20, this repo's bake-off corpora): ratec 0.20
 (en) / 0.29 (zh) / 0.50 (b64) vs tiktoken r50k 0.28 / 0.72 / 0.77 —
-**26–50% fewer LM positions** for the same bytes.
+**26–50% fewer LM positions** for the same bytes. On high-entropy streams
+the credit carry-over patcher compounds the win: base64 0.500 → **0.384**
+units/byte (−23.2% patches; an independent replication measured −23%) —
+reproduce with `patch_from_sur(RateC(store_book=False).surprise(b64), 20,
+carry=True)` against `tests/data/fixtures/base64.span.bin`.
 
 ## API
 
@@ -239,8 +243,11 @@ paths to raw speed.
    BPE 3.112 < raw bytes 4.147 < RateC C=10 4.80–4.82 BPB; the factorized
    interface is free (Δ 0.02 BPB vs direct ids) — the tokenization gap is
    long-tail patch-type frequency starving tiny embeddings. Full record:
-   `docs/twin_study.md` + `research/`. Next: frequency-
-   aware book pruning, LM-optimal C sweep, training-scale probe. Tokenizer
+   `docs/twin_study.md` + `research/`. **Training-scale probe (4× steps,
+   post-v0.4.1):** the gap narrows 1.684 → 1.212 BPB (−28.1%); RateC
+   improves 1.94× more than BPE for the same extra compute, in every
+   domain. Next: full 4-arm matrix at 2400 steps, frequency-aware book
+   pruning, LM-optimal C sweep, wider scale ladder. Tokenizer
    ecosystem bridges (GGUF/llama.cpp, vLLM) once the training side settles.
 6. **~~Fractional C~~ done** — double C everywhere, snapshot v5.
 7. **~~Credit carry-over patcher~~ done** — `carry=True`; −15.1% patches
