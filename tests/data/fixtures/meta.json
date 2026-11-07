@@ -1,0 +1,22 @@
+{
+ "english": {
+  "warm_bytes": 32768,
+  "scored_bytes": 267232,
+  "span_sha256": "6f5782af1d5b4c572bd4cc72f27bf09d0550d8df54bd2b5de7dce5765ea65afc"
+ },
+ "code": {
+  "warm_bytes": 32768,
+  "scored_bytes": 164574,
+  "span_sha256": "411a6530352d2ad5d3f5e7cc1328a0acf86fddab497cb52c55e9c768a4c961de"
+ },
+ "chinese": {
+  "warm_bytes": 32769,
+  "scored_bytes": 267231,
+  "span_sha256": "39a95c6ffe908a4dd8c2dfbfcd0647a8ea40a078b40240179a2851ea93ddcdec"
+ },
+ "base64": {
+  "warm_bytes": 32768,
+  "scored_bytes": 260568,
+  "span_sha256": "c187504d946ce16476a08543e820cd8b66ea048ea66d5c6fb600e716b4b6a92c"
+ }
+}

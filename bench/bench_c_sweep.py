@@ -26,7 +26,7 @@ Gates (must pass for every domain and C before any timing counts):
   G4 batch_spans(4 docs, c=C, threads=2) starts == serial golden starts
 
 Outputs: printed table + trend summary, c_sweep.json, c_sweep.csv,
-fig_c_sweep.png in /home/z/my-project/download/ratec_lib_report.
+fig_c_sweep.png in OUT (default ./results, override with RATEC_OUT).
 Exit code 0 iff all gates pass, else 1.
 """
 import json
@@ -37,12 +37,16 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, "/home/z/my-project/ratec")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)                       # ratec/ repo root
+sys.path.insert(0, ROOT)
 import ratec
 
-DATA = "/home/z/my-project/bakeoff_data"
-CACHE = "/home/z/my-project/bakeoff_cache"
-OUT = "/home/z/my-project/download/ratec_lib_report"
+FIXTURES = os.environ.get(
+    "RATEC_FIXTURES",
+    os.path.join(ROOT, "tests", "data", "fixtures"))
+PRIV_CACHE = os.environ.get("RATEC_BAKEOFF_CACHE")   # full per-C goldens, optional
+OUT = os.environ.get("RATEC_OUT") or os.path.join(os.getcwd(), "results")
 os.makedirs(OUT, exist_ok=True)
 
 DOMAINS = ["english", "code", "chinese", "base64"]
@@ -56,17 +60,24 @@ def med(v):
 
 
 # ---------------------------------------------------------------- inputs
-meta = json.load(open(f"{CACHE}/meta.json"))
-spans = {}
-for dom in DOMAINS:
-    m = meta[dom]
-    raw = open(f"{DATA}/{dom}.txt", "rb").read()
-    spans[dom] = raw[m["warm_bytes"]: m["warm_bytes"] + m["scored_bytes"]]
+# spans ship with the repo; goldens do too, but only for C=20. The full set
+# of per-C reference starts lives in the private bake-off cache — set
+# RATEC_BAKEOFF_CACHE to enable the full golden gate at every C.
+spans = {dom: open(os.path.join(FIXTURES, f"{dom}.span.bin"), "rb").read()
+         for dom in DOMAINS}
 
-golden = {}
-for dom in DOMAINS:
-    for C in CS:
-        golden[(dom, C)] = np.load(f"{CACHE}/{dom}.r{C}starts.npy").astype(np.int64)
+def _golden(dom, C):
+    p = os.path.join(FIXTURES, f"{dom}.starts.npy")
+    if C == 20 and os.path.exists(p):
+        return np.load(p).astype(np.int64)
+    if PRIV_CACHE and os.path.exists(os.path.join(PRIV_CACHE, f"{dom}.r{C}starts.npy")):
+        return np.load(os.path.join(PRIV_CACHE, f"{dom}.r{C}starts.npy")).astype(np.int64)
+    return None
+
+golden = {(dom, C): _golden(dom, C) for dom in DOMAINS for C in CS}
+golden_mode = ("full private cache" if all(v is not None for v in golden.values())
+               else "shipped C=20 + internal cross-checks" if any(v is not None for v in golden.values())
+               else "none")
 
 print("C-sweep bench | ratec", ratec.__version__)
 print("spans:", {d: len(spans[d]) for d in DOMAINS})
@@ -90,15 +101,16 @@ for dom in DOMAINS:
         ref = golden[(dom, C)]
         ok, why = True, []
 
-        # G1 fresh-engine spans + G2 contiguity
+        # G1 fresh-engine spans (== golden when a golden exists) + G2 tiling
         sp = ratec.RateC(c=C, store_book=False).encode_to_spans(span)
         starts = np.array([s for s, _, _ in sp], dtype=np.int64)
         ends = np.array([e for _, e, _ in sp], dtype=np.int64)
-        if not np.array_equal(starts, ref):
-            k = int(np.argmax(starts != ref)) if len(starts) == len(ref) else -1
-            ok = False
-            why.append(f"starts!=golden (n={len(starts)} vs {len(ref)}"
-                       + (f", first diff idx {k}: {starts[k]} vs {ref[k]})" if k >= 0 else ")"))
+        if ref is not None:
+            if not np.array_equal(starts, ref):
+                k = int(np.argmax(starts != ref)) if len(starts) == len(ref) else -1
+                ok = False
+                why.append(f"starts!=golden (n={len(starts)} vs {len(ref)}"
+                           + (f", first diff idx {k}: {starts[k]} vs {ref[k]})" if k >= 0 else ")"))
         tiled = (len(sp) > 0 and starts[0] == 0 and ends[-1] == n
                  and np.array_equal(starts[1:], ends[:-1]))
         if not tiled:
@@ -108,14 +120,19 @@ for dom in DOMAINS:
             ok = False
             why.append("starts not strictly increasing")
 
-        # G3 reference patcher on stored surprisal
+        # G3 reference patcher on stored surprisal; must equal the engine's
+        # own starts at every C (judge/patcher independence) — universal,
+        # and == golden wherever a golden exists
         ps = ratec.patch_from_sur(sur, C).astype(np.int64)
-        if not np.array_equal(ps, ref):
+        if not np.array_equal(ps, starts):
+            ok = False
+            why.append(f"patch_from_sur!=engine starts (n={len(ps)} vs {len(starts)})")
+        elif ref is not None and not np.array_equal(ps, ref):
             ok = False
             why.append(f"patch_from_sur!=golden (n={len(ps)} vs {len(ref)})")
 
         gate[(dom, C)] = ok
-        gate_detail[(dom, C)] = "; ".join(why)
+        gate_detail[(dom, C)] = "; ".join(w for w in why if w)
 
     # G3 verdict for the domain (patcher path, all C)
     s_ok = all(gate[(dom, C)] for C in CS)
@@ -132,13 +149,14 @@ for C in CS:
     res_b = ratec.batch_spans(docs, c=C, threads=2)
     for dom, (starts, n_bytes) in zip(DOMAINS, res_b):
         ref = golden[(dom, C)]
-        if n_bytes != len(spans[dom]) or not np.array_equal(starts.astype(np.int64), ref):
+        if ref is not None and (n_bytes != len(spans[dom]) or
+                                not np.array_equal(starts.astype(np.int64), ref)):
             ok = False
             why.append(f"{dom}: batch starts != golden")
     batch_gate[C] = (ok, "; ".join(why))
     all_gates &= ok
 
-print("GATE (bit-exactness vs bakeoff_cache golden, every C):")
+print(f"GATE (mode: {golden_mode}):")
 for dom in DOMAINS:
     stat = "PASS" if all(gate[(dom, C)] for C in CS) else "FAIL"
     bad = [C for C in CS if not gate[(dom, C)]]
@@ -181,13 +199,15 @@ for rep in range(REPS):
             sp = tok.encode_to_spans(data)
             dt = (time.perf_counter_ns() - t0) / 1e9
             runtimes[(d, C)].append(dt)
-            if rep == 0:                      # pool engine stays bit-exact
+            if rep == 0 and golden[(d, C)] is not None:  # pool engine stays bit-exact
                 pool_exact[(d, C)] = bool(np.array_equal(
                     np.array([s for s, _, _ in sp], dtype=np.int64),
                     golden[(d, C)]))
 
-pool_ok = all(pool_exact.values())
-print(f"pool-engine spot check (rep 0 starts == golden, all arms): "
+pool_known = {k: v for k, v in pool_exact.items() if v is not None}
+pool_ok = bool(pool_known) and all(pool_known.values())
+print(f"pool-engine spot check (rep 0 starts == golden where a golden exists, "
+      f"{len(pool_known)}/{len(pool_exact)} arms): "
       f"{'PASS' if pool_ok else 'FAIL'}\n")
 
 # ------------------------------------------------------- batch timing
@@ -205,7 +225,9 @@ for d in DOMAINS:
     res[d] = {"bytes": n, "per_c": {}}
     for C in CS:
         ms = med(runtimes[(d, C)])
-        n_patches = len(golden[(d, C)])
+        n_patches = (len(golden[(d, C)]) if golden[(d, C)] is not None
+                     else len(ratec.RateC(c=C, store_book=False)
+                              .encode_to_spans(spans[d])))
         res[d]["per_c"][C] = {
             "gate": True,                     # reaching here == all gates passed
             "patches": n_patches,
@@ -274,9 +296,11 @@ json.dump({
                      "encode_to_spans; round-robin across all (domain,C) arms; medians",
         "batch_arm": "ratec.batch_spans(docs of all 4 domains, c=C, threads=2), "
                      "round-robin over C; total MB/s over all 4 docs",
-        "gates": "G1 spans==golden r{C}starts (int64 exact), G2 tiling [0,len), "
-                 "G3 patch_from_sur(surprise(span),C)==golden, "
-                 "G4 batch starts==serial golden; all must pass before timing counts",
+        "gates": "G1 spans==golden r{C}starts (int64 exact, wherever a golden "
+                 "exists), G2 tiling [0,len), G3 patch_from_sur==engine starts "
+                 "at every C (==golden where available), G4 batch starts==golden; "
+                 "all must pass before timing counts",
+        "golden_mode": golden_mode,
         "pool_engine_rep0_exact": bool(pool_ok),
     },
     "per_domain": res,
@@ -330,7 +354,7 @@ ax.set_ylabel("throughput (MB/s, 1 thread, median)")
 ax.set_title("Single-thread throughput vs C\n(should be nearly flat)")
 ax.grid(alpha=0.25)
 
-fig.suptitle("RateC C-sweep — bit-exact vs golden starts at every C"
+fig.suptitle("RateC C-sweep — gated (" + golden_mode + ")"
              if all_gates else "RateC C-sweep — GATE FAILURES (timing invalid)",
              fontsize=11)
 fig.savefig(f"{OUT}/fig_c_sweep.png", dpi=150)

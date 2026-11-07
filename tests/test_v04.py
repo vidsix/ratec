@@ -5,6 +5,7 @@
 Run:  python3 tests/test_v04.py
 Exit 0 only if every check passes.
 """
+import hashlib
 import json
 import os
 import sys
@@ -23,12 +24,13 @@ def check(name, ok, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
 
 
-BK = "/home/z/my-project/bakeoff_data"
 TD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-code = open(os.path.join(BK, "code.txt"), "rb").read()
-zh = open(os.path.join(BK, "chinese.txt"), "rb").read()
-mix = open(os.path.join(BK, "mixed.bin"), "rb").read()
-corpus = code[:80000] + zh[:50000] + mix[:30000]          # 160k mixed bytes
+fmeta = json.load(open(os.path.join(TD, "fixtures_meta.json")))
+corpus = open(os.path.join(TD, "gate_slice.bin"), "rb").read()   # 160k mixed bytes
+assert len(corpus) == fmeta["gate_slice_len"] and hashlib.sha256(corpus).hexdigest() == fmeta["gate_slice_sha256"], \
+    "gate_slice.bin corrupt — see fixtures_meta.json"
+# the slice was captured as code[:80k]+zh[:50k]+mix[:30k]; the raw files are
+# workspace-local, so the bound slice ships instead — identical bytes everywhere
 
 # ============================================================ 1. fractional C
 print("1. fractional C")
@@ -172,10 +174,13 @@ check("v5 snapshot: carry mode preserved",
       tcb.carry_mode and tcb.encode_to_spans(cont) == tc.encode_to_spans(cont))
 
 ok_v4 = True
-cont_v4 = code[60000:96000]          # exactly the fixture capture's slice
+cont_v4 = open(os.path.join(TD, "v4_cont_slice.bin"), "rb").read()   # the fixture capture's slice
+assert len(cont_v4) == fmeta["v4_cont_len"] and hashlib.sha256(cont_v4).hexdigest() == fmeta["v4_cont_sha256"], \
+    "v4_cont_slice.bin corrupt"
 for c in (20, 33):
     blob = open(os.path.join(TD, f"v4_c{c}.bin"), "rb").read()
     gold = json.load(open(os.path.join(TD, f"v4_c{c}_cont_golden.json")))
+    assert gold["cont_sha256"] == fmeta["v4_cont_sha256"]
     t4 = ratec.RateC.from_state(blob)
     if abs(t4.c - float(c)) > 1e-12:
         ok_v4 = False

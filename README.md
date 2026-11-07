@@ -6,15 +6,24 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.4.0, experimental. The C core and byte-level semantics are
+> **Status:** v0.4.1, experimental. The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the LM-side surface (`ratec.smollm2`)
 > and the patcher modes/servos are new and may still move. Code-first
 > repo: run `tests/` and `bench/` yourself — no benchmark claims against
-> SOTA in this README.
+> SOTA in this README. Independently replicated: an external gate
+> (tiling/parity/carry/fractional-C monotonicity) passes on foreign boxes,
+> and the base64 fertility number replicates exactly.
 
 ```
 pip install .            # C extension, gcc >= 9, x86-64 (or any 64-bit)
+make test                # or: python -m pytest tests/  (conftest builds in place)
 ```
+
+Tests run anywhere: the scored spans, reference surprisal/starts, the
+v4-continuation slices, the u8_image raster and the snapshot-training corpus
+ship under `tests/data/` (sha256-bound, ~11 MB incl. reference arrays). Env
+overrides: `RATEC_FIXTURES`, `RATEC_BAKEOFF_DATA` + `RATEC_BAKEOFF_CACHE`
+(full per-C golden gate), `RATEC_OUT`.
 
 ```python
 import ratec
@@ -225,8 +234,14 @@ paths to raw speed.
    single-threaded.
 5. **LM track (active):** twin-study training harness — same byte
    budget, RateC vs BPE vs raw bytes, measured on BPB / params /
-   FLOPs-per-byte; tokenizer ecosystem bridges (GGUF/llama.cpp, vLLM)
-   once the training side settles.
+   FLOPs-per-byte. **First result (v0.4.1):**
+   compute-matched at 1.3M params on identical 15.8M train / 659k val bytes,
+   BPE 3.112 < raw bytes 4.147 < RateC C=10 4.80–4.82 BPB; the factorized
+   interface is free (Δ 0.02 BPB vs direct ids) — the tokenization gap is
+   long-tail patch-type frequency starving tiny embeddings. Full record:
+   `docs/twin_study.md` + `research/`. Next: frequency-
+   aware book pruning, LM-optimal C sweep, training-scale probe. Tokenizer
+   ecosystem bridges (GGUF/llama.cpp, vLLM) once the training side settles.
 6. **~~Fractional C~~ done** — double C everywhere, snapshot v5.
 7. **~~Credit carry-over patcher~~ done** — `carry=True`; −15.1% patches
    at C=20, mean rate → C exactly, streaming bit-exact.
@@ -238,6 +253,11 @@ paths to raw speed.
     deferred: the patcher is 5.5% of runtime and the judge's orders-3..5
     probes are fused predict+update (an exact skip cannot avoid them).
     Numbers and the revisit conditions are in `docs/v04_design.md`.
+11. **~~External-replication hardening~~ done (v0.4.1)** — shippable
+    fixtures replace author-local paths, v4-continuation goldens replay
+    byte-exactly on any machine, parallel-fertility is informational
+    (tiling/determinism stay hard), `conftest.py` + `make test` for the
+    first-run experience.
 
 ## Layout
 
@@ -262,7 +282,11 @@ docs/
   smollm2_port.md    the LM port, precisely
   PROFILING.md       the ablation profile behind the v2 engine
   v04_design.md      what landed / was measured / was declined, with numbers
+  twin_study.md      the paired BPE-vs-RateC LM experiment, with numbers
   container.md       container format spec (draft v0.1)
+research/
+  twin_summary.json  machine-readable twin-study digest
+  twin_study.py      the exact twin-study harness (protocol audit)
 ```
 
 Rebuild in place:

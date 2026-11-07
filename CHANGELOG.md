@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.4.1 — 2026-11 (external-replication round)
+
+Shipped after an independent third-party replication of v0.4.0 (fresh box,
+gcc 14.2 / Python 3.12): their external gate passed on all five domains
+(tiling, `patch_from_sur` == engine, streaming parity, carry round-trip,
+fractional-C monotonicity 14.0→23.75), base64 fertility replicated exactly
+(0.500 vs tiktoken 0.773 units/byte), carry patcher measured −23% patches on
+high-entropy streams, exact-lane speed landed inside the claimed 0.4–0.65× of
+tiktoken. Findings from that round, all fixed here:
+
+- **Portability**: no more absolute author paths. The scored spans, reference
+  surprisal/starts (C=20), binary round-trip inputs, the u8_image raster
+  (`ascent.raw`, 256 kB) and the 320 kB `lm_corpus.bin` snapshot-training
+  corpus now ship under `tests/data/` (~11 MB total incl. reference arrays,
+  sha256-bound in `fixtures_meta.json`); `tests/gate_bitexact.py`, both
+  benches and all four `test_*.py` suites resolve data repo-relative. Env
+  overrides: `RATEC_FIXTURES`, `RATEC_BAKEOFF_DATA` / `RATEC_BAKEOFF_CACHE`
+  (full per-C goldens), `RATEC_OUT`.
+- **Machine-independent goldens**: `test_v04.py` loads the captured corpus
+  slice (`gate_slice.bin`, 160k) and the v4 continuation slice
+  (`v4_cont_slice.bin`, 36k) from `tests/data/` instead of author-local
+  corpora — the v4→v5 continuation goldens are now replayable byte-exactly on
+  any machine, with sha256 assertions binding slices to goldens.
+- **Parallel-fertility check**: hard invariants stay tiling + determinism;
+  fertility is informational with a 15% soft bound (an external box measured
+  ×1.105 against the previous 10% bound — snapshot-head judge state per chunk
+  worker is box-dependent, not an engine invariant).
+- **First-run DX**: `conftest.py` builds the engine in place when pytest runs
+  from the repo root; `Makefile` adds `make build / test / pytest / bench`.
+- C-sweep gate degrades honestly when per-C goldens are absent: golden
+  equality is asserted at C=20 (shipped) and everywhere in private-cache mode;
+  at other C it asserts tiling, strict monotonicity and
+  `patch_from_sur == engine starts` (judge/patcher independence), recorded as
+  `golden_mode` in `c_sweep.json`.
+- Perf: default path bit-identical to v0.4.0 (gate green on all four domains).
+- **Twin study, first result** (the standing BPE-vs-RateC LM experiment):
+  compute-matched, identical 15.8M train / 659k val bytes, seed 42,
+  full-coverage byte-weighted BPB — BPE 3.112 < raw bytes 4.147 <
+  ratec_direct 4.796 ≈ ratec (factorized) 4.816. Interface is free
+  (Δ 0.02 BPB); the tokenization gap is long-tail patch-type frequency
+  starving tiny embeddings. Protocol, numbers and harness:
+  `docs/twin_study.md`, `research/`.
+
 ## v0.4.0 — 2026-11
 
 - **Fractional C**: `C` is a double everywhere (constructor, patcher,

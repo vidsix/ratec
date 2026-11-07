@@ -1,32 +1,69 @@
 #!/usr/bin/env python3
 """Gate: the ratec library engine must be bit-exact with the validated
-reference pipeline (ratec_judge.c / cached bake-off arrays).
+reference pipeline.
+
+Two modes:
+
+  * shipped fixtures (default) — runs anywhere. Uses the scored spans and
+    reference arrays in tests/data/fixtures/ (captured from the validated
+    reference pipeline on the bake-off corpora):
+      {dom}.span.bin   scored span (post-warm bytes)
+      {dom}.sur.npy    reference float32 per-byte surprisal
+      {dom}.starts.npy reference patch starts at C=20 (uint32)
+
+  * private bake-off (full corpora, all domains) — set
+      RATEC_BAKEOFF_DATA=/path/to/bakeoff_data
+      RATEC_BAKEOFF_CACHE=/path/to/bakeoff_cache
+    (cache needs {dom}.sur.npy, {dom}.r20starts.npy, meta.json).
 
 Checks per domain (C=20):
-  1. surprise(span)   == {dom}.sur.npy            (float32, bitwise)
-  2. encode spans     == {dom}.r20starts.npy      (patch starts)
-  3. patch_from_sur(sur, 20) == {dom}.r20starts.npy
+  1. surprise(span)   == reference surprisal      (float32, bitwise)
+  2. encode spans     == reference patch starts
+  3. patch_from_sur(sur, 20) == reference starts
   4. engine spans are contiguous and tile the input exactly
 """
+import hashlib
 import json
+import os
 import sys
+
 import numpy as np
 
-sys.path.insert(0, "/home/z/my-project/ratec")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import ratec
 
-CACHE = "/home/z/my-project/bakeoff_cache"
-DATA = "/home/z/my-project/bakeoff_data"
+HERE = os.path.dirname(os.path.abspath(__file__))
+FIXTURES = os.path.join(HERE, "data", "fixtures")
+PRIV_DATA = os.environ.get("RATEC_BAKEOFF_DATA")
+PRIV_CACHE = os.environ.get("RATEC_BAKEOFF_CACHE")
 DOMAINS = ["english", "code", "chinese", "base64"]
 
-meta = json.load(open(f"{CACHE}/meta.json"))
+
+def load_domain(dom):
+    """-> (span bytes, ref sur f32, ref starts int64)."""
+    if PRIV_DATA and PRIV_CACHE:
+        meta = json.load(open(os.path.join(PRIV_CACHE, "meta.json")))[dom]
+        raw = open(os.path.join(PRIV_DATA, f"{dom}.txt"), "rb").read()
+        span = raw[meta["warm_bytes"]: meta["warm_bytes"] + meta["scored_bytes"]]
+        sur = np.load(os.path.join(PRIV_CACHE, f"{dom}.sur.npy"))
+        starts = np.load(os.path.join(PRIV_CACHE, f"{dom}.r20starts.npy"))
+        return span, sur, starts.astype(np.int64)
+    span = open(os.path.join(FIXTURES, f"{dom}.span.bin"), "rb").read()
+    gm = json.load(open(os.path.join(FIXTURES, "meta.json")))[dom]
+    assert hashlib.sha256(span).hexdigest() == gm["span_sha256"], \
+        f"{dom}.span.bin corrupt (sha mismatch)"
+    sur = np.load(os.path.join(FIXTURES, f"{dom}.sur.npy"))
+    starts = np.load(os.path.join(FIXTURES, f"{dom}.starts.npy"))
+    return span, sur, starts.astype(np.int64)
+
+
+mode = ("private bake-off (%s)" % PRIV_CACHE) if (PRIV_DATA and PRIV_CACHE) \
+    else "shipped fixtures (%s)" % os.path.relpath(FIXTURES)
+print(f"gate mode: {mode}")
+
 ok = True
 for dom in DOMAINS:
-    raw = open(f"{DATA}/{dom}.txt", "rb").read()
-    m = meta[dom]
-    span = raw[m["warm_bytes"]: m["warm_bytes"] + m["scored_bytes"]]
-    sur_ref = np.load(f"{CACHE}/{dom}.sur.npy")
-    starts_ref = np.load(f"{CACHE}/{dom}.r20starts.npy").astype(np.int64)
+    span, sur_ref, starts_ref = load_domain(dom)
 
     tok = ratec.RateC(c=20, store_book=False)
     sur_new = tok.surprise(span)

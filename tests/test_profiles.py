@@ -12,6 +12,8 @@ Checks:
   c. malformed headers / odd lengths raise ValueError
   d. registry API: 4 names, apply/restore accept str or Profile
 """
+import hashlib
+import json
 import os
 import struct
 import sys
@@ -47,10 +49,19 @@ def raises_ve(fn):
         return False
 
 
-DATA = "/home/z/my-project/bakeoff_data"
+# assets ship with the repo (sha256-bound in ../fixtures_meta.json — see
+# scripts/ship_straggler_fixtures.py); RATEC_FIXTURES overrides for
+# author-local variants
+DATA = os.environ.get(
+    "RATEC_FIXTURES",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fixtures"))
 
 # ------------------------------------------------------------------- assets
 img = open(os.path.join(DATA, "ascent.raw"), "rb").read()
+fmeta = json.load(open(os.path.join(DATA, os.pardir, "fixtures_meta.json")))
+assert len(img) == fmeta["ascent_raw_len"] and \
+    hashlib.sha256(img).hexdigest() == fmeta["ascent_raw_sha256"], \
+    "ascent.raw corrupt — see fixtures_meta.json"
 img_width = 512 if len(img) % 512 == 0 else 1   # spec rule: 512 if divisible else 1-row
 img_prof = (PROFILES["u8_image"] if img_width == 512
             else profiles.make_u8_image(img_width))
@@ -127,7 +138,9 @@ check("f32: byte-plane separation reduces patch count",
       counts["f32"][1] < counts["f32"][0])
 check("u8_image: per-row delta reduces patch count",
       counts["u8_image"][1] < counts["u8_image"][0])
-sample = open(os.path.join(DATA, "english.txt"), "rb").read()[32768:32768 + 20000]
+# english.span.bin == english.txt[32768:32768+267232] (post-warm span), so its
+# first 20000 bytes are the same english.txt[32768:52768] slice as before
+sample = open(os.path.join(DATA, "english.span.bin"), "rb").read()[:20000]
 check("raw: identity keeps patch count identical",
       n_patches(apply("raw", sample)) == n_patches(sample))
 

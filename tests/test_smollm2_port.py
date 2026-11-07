@@ -4,6 +4,7 @@
 Run:  python3 tests/test_smollm2_port.py
 No torch required (tokenizer + config side only).
 """
+import hashlib
 import json
 import os
 import shutil
@@ -25,15 +26,20 @@ def check(name, cond, extra=""):
         FAILURES.append(name)
 
 
-DATA = "/home/z/my-project/bakeoff_data"
+# the exact 320,000-B corpus ships with the repo (sha256-bound in
+# ../fixtures_meta.json — see scripts/ship_straggler_fixtures.py);
+# RATEC_FIXTURES overrides for author-local variants
+DATA = os.environ.get(
+    "RATEC_FIXTURES",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fixtures"))
 
 # ------------------------------------------------ 1. snapshot from corpus
 print("== snapshot training (corpus ingestion) ==")
-corpus = b"".join([
-    open(f"{DATA}/english.txt", "rb").read()[:200000],
-    open(f"{DATA}/code.txt", "rb").read()[:60000],
-    open(f"{DATA}/chinese.txt", "rb").read()[:60000],
-])
+corpus = open(os.path.join(DATA, "lm_corpus.bin"), "rb").read()
+fmeta = json.load(open(os.path.join(DATA, os.pardir, "fixtures_meta.json")))
+assert len(corpus) == fmeta["lm_corpus_len"] and \
+    hashlib.sha256(corpus).hexdigest() == fmeta["lm_corpus_sha256"], \
+    "lm_corpus.bin corrupt — see fixtures_meta.json"
 tok_raw = ratec.RateC(c=20)
 tok_raw.encode_bytes(corpus)
 snap = tok_raw.save_state()

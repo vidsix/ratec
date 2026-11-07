@@ -1,0 +1,14 @@
+{
+ "gate_slice_len": 160000,
+ "gate_slice_sha256": "5490a4fe765e5345494177ab64a86c7ea7b516e16c4cd05981ac6af71c8ce312",
+ "gate_slice_recipe": "code[:80000] + chinese[:50000] + mixed[:30000]",
+ "v4_cont_len": 36000,
+ "v4_cont_sha256": "01204dfc2eb392c1a8e7ff2a18ddac62b75fee0ce4bc3029c59bfe08722979de",
+ "v4_cont_recipe": "code[60000:96000] (== v4_c*_cont_golden.json cont_sha256)",
+ "ascent_raw_len": 262144,
+ "ascent_raw_sha256": "c7777d46c3f4e3119ddbec92ad28c09193202a7a4aab08622bc7e4b4a3ba88e6",
+ "ascent_raw_recipe": "bakeoff_data/ascent.raw (512-wide u8 raster)",
+ "lm_corpus_len": 320000,
+ "lm_corpus_sha256": "d9b79620cb05d8c151ab9a8f0be90d753275f3f1569694db8f781f9724208d21",
+ "lm_corpus_recipe": "english[:200000] + code[:60000] + chinese[:60000]"
+}

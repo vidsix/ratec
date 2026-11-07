@@ -18,26 +18,32 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, "/home/z/my-project/ratec")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)                       # ratec/ repo root
+sys.path.insert(0, ROOT)
 import ratec
 
-DATA = "/home/z/my-project/bakeoff_data"
-OUT = "/home/z/my-project/download/ratec_lib_report"
+FIXTURES = os.environ.get(
+    "RATEC_FIXTURES",
+    os.path.join(ROOT, "tests", "data", "fixtures"))
+OUT = os.environ.get("RATEC_OUT") or os.path.join(os.getcwd(), "results")
 os.makedirs(OUT, exist_ok=True)
 DOMAINS = ["english", "code", "chinese", "base64"]
 
-spans = {}
-for dom in DOMAINS:
-    raw = open(f"{DATA}/{dom}.txt", "rb").read()
-    spans[dom] = raw[32768: 32768 + 267232 if dom in ("english", "chinese")
-                     else len(raw)]
-# use the exact scored spans from meta for comparability with speed2
-import json as _json
-meta = _json.load(open("/home/z/my-project/bakeoff_cache/meta.json"))
-for dom in DOMAINS:
-    m = meta[dom]
-    raw = open(f"{DATA}/{dom}.txt", "rb").read()
-    spans[dom] = raw[m["warm_bytes"]: m["warm_bytes"] + m["scored_bytes"]]
+# scored spans ship with the repo (identical bytes everywhere)
+spans = {dom: open(os.path.join(FIXTURES, f"{dom}.span.bin"), "rb").read()
+         for dom in DOMAINS}
+
+def _golden(dom):
+    """Reference starts when available: shipped (C=20) or private cache via
+    RATEC_BAKEOFF_CACHE. Exactness is asserted only where a golden exists."""
+    p = os.path.join(FIXTURES, f"{dom}.starts.npy")
+    if os.path.exists(p):
+        return np.load(p)
+    cache = os.environ.get("RATEC_BAKEOFF_CACHE")
+    if cache and os.path.exists(os.path.join(cache, f"{dom}.r20starts.npy")):
+        return np.load(os.path.join(cache, f"{dom}.r20starts.npy"))
+    return None
 
 def med(v): return statistics.median(v)
 
@@ -83,12 +89,14 @@ for rep in range(21):
         for d in DOMAINS:
             sp = rtok.encode_to_spans(spans[d]) if False else None
 
-# exactness: fresh engine per domain vs cached starts
+# exactness: fresh engine per domain vs reference starts (shipped C=20 golden,
+# or the private bake-off cache when RATEC_BAKEOFF_CACHE is set)
 exactness = {}
 for d in DOMAINS:
-    st_ref = np.load(f"/home/z/my-project/bakeoff_cache/{d}.r20starts.npy")
+    ref = _golden(d)
     sp = ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(spans[d])
-    exactness[d] = bool(np.array_equal(np.array([s for s, _, _ in sp], dtype=np.int64), st_ref.astype(np.int64)))
+    exactness[d] = None if ref is None else bool(np.array_equal(
+        np.array([s for s, _, _ in sp], dtype=np.int64), ref.astype(np.int64)))
 
 res2 = {}
 for d in DOMAINS:
@@ -123,8 +131,9 @@ docs = [spans[d] for d in DOMAINS]
 tokbatch = ratec.batch_spans(docs, c=20, threads=2)  # cold engines
 tb = sum(len(x[0]) for x in tokbatch)
 for dom, (starts, n) in zip(DOMAINS, tokbatch):
-    st_ref = np.load(f"/home/z/my-project/bakeoff_cache/{dom}.r20starts.npy")
-    assert bool(np.array_equal(starts.astype(np.int64), st_ref.astype(np.int64))), dom
+    ref = _golden(dom)
+    if ref is not None:
+        assert bool(np.array_equal(starts.astype(np.int64), ref.astype(np.int64))), dom
 t0 = time.perf_counter()
 for _ in range(9):
     ratec.batch_spans(docs, c=20, threads=2)
@@ -184,8 +193,9 @@ print(f"batch(2T) ratec/tiktoken: {tot_b/ratec_batch_s / (tot_b/tik_batch_s):.2f
 
 json.dump({"protocol": {
     "c_bits": 20, "pf": 3, "reps": {"tiktoken": 25, "ratec": 31},
-    "input": "bake-off scored spans (32768B warm edge trimmed)",
-    "ratec_arm": "ratec 0.1.0 engine, pool steady-state (in-place reset, reset cost included), store_book=False, pf=2, prebits=21",
+    "input": "bake-off scored spans (shipped fixtures; or RATEC_BAKEOFF_DATA + RATEC_BAKEOFF_CACHE)",
+    "golden_mode": "shipped C=20 starts" if any(v is not None for v in exactness.values()) else "none (exactness not asserted)",
+    "ratec_arm": "ratec engine, pool steady-state (in-place reset, reset cost included), store_book=False, pf=2, prebits=21",
     "exactness": {d: res[d]["ratec"]["exact"] for d in DOMAINS}},
     "per_domain": res, "overall": overall,
     "speedup_vs_r50k": speed,
