@@ -8,13 +8,21 @@ book adapt as they read — so its units-per-byte on held-out data should
 measures exactly that, holding the probe bytes fixed:
 
   for each adaptation scale s (log-spaced):
-      warm one engine on corpus[:s]
-      measure units/byte on the SAME fixed probe (never seen at any s)
+      feed the unseen delta corpus[prev:s] to ONE warming engine
+      snapshot it; score the SAME fixed probe on a disposable engine
+      loaded from that snapshot (the probe never touches the warming
+      engine, so it stays held out at every s)
       record book size and singleton fraction (patch types seen once)
 
-Arms: ratec warm@scale s (one engine, adaptation continues), ratec cold
-(scale 0: fresh engine per rep), tiktoken r50k_base (flat by construction;
+Arms: ratec warm@scale s (snapshot-loaded probe engine), ratec cold
+(scale 0: fresh engine), tiktoken r50k_base (flat by construction;
 measured, not asserted — and only when tiktoken is importable).
+
+Protocol note (v0.6.0): the v0.5.0 run re-fed corpus[:s] cumulatively at
+every scale AND scored the probe on the warming engine itself, so the
+"held-out" probe was ingested up to 8 times before its last measurement
+(small-scale rows flattered the most). Fixed here; the v0.5.0 record was
+regenerated under this corrected protocol.
 
 Portable by default: the corpus is the concatenation of the shipped scored
 spans (english+code+chinese+base64 ≈ 959 KB). Point RATEC_SCALE_DATA at a
@@ -23,11 +31,12 @@ the published README numbers come from that mode.
 
 Outputs: table to stdout; scale.json into RATEC_OUT (default: ./results).
 """
+import hashlib
 import json
 import os
-import statistics
 import sys
 from collections import Counter
+from importlib import metadata as _ilmd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -41,6 +50,7 @@ OUT = os.environ.get("RATEC_OUT") or os.path.join(os.getcwd(), "results")
 os.makedirs(OUT, exist_ok=True)
 
 PROBE_BYTES = int(os.environ.get("RATEC_SCALE_PROBE", 128 * 1024))
+_CORPUS_FILE_SHA256 = None
 
 # --------------------------------------------------------------- corpus load
 # Portable default: the four shipped scored spans (~959 KB of raw bytes).
@@ -50,9 +60,11 @@ PROBE_BYTES = int(os.environ.get("RATEC_SCALE_PROBE", 128 * 1024))
 # RATEC_SCALE_DATA replaces all of this with one big plain file (the probe
 # is then that file's tail).
 def load_corpus():
+    global _CORPUS_FILE_SHA256
     big = os.environ.get("RATEC_SCALE_DATA")
     if big:
         data = open(big, "rb").read()
+        _CORPUS_FILE_SHA256 = hashlib.sha256(data).hexdigest()
         print(f"corpus: {big} ({len(data)/1e6:.2f} MB) [RATEC_SCALE_DATA]")
         pool, probe = data[:-PROBE_BYTES], data[-PROBE_BYTES:]
         return pool, probe, "RATEC_SCALE_DATA"
@@ -75,6 +87,26 @@ def load_corpus():
     return pool, probe, "shipped_fixtures"
 
 CORPUS, PROBE, CORPUS_KIND = load_corpus()
+
+# Trim the probe tail to a UTF-8 boundary ONCE, before anything runs: the
+# tiktoken arm decodes the probe, and a corpus that happens to split a
+# codepoint at the pool/probe boundary must not kill a run AFTER the
+# measurements but BEFORE the JSON dump (v0.5.0 record lost to exactly
+# that). RateC arms are byte-level and unaffected by the trim.
+def _trim_utf8_tail(b: bytes) -> bytes:
+    for k in range(4):
+        try:
+            b[: len(b) - k].decode("utf-8")
+            return b[: len(b) - k]
+        except UnicodeDecodeError:
+            continue
+    raise SystemExit("probe: no UTF-8 boundary within the last 4 bytes")
+
+_n0 = len(PROBE)
+PROBE = _trim_utf8_tail(PROBE)
+if len(PROBE) != _n0:
+    print(f"note: probe tail trimmed {_n0 - len(PROBE)} byte(s) to a UTF-8 "
+          f"boundary ({len(PROBE)} bytes measured)")
 
 TRAIN_POOL = CORPUS
 
@@ -121,22 +153,46 @@ hdr = f"{'adaptation':>12} {'units/byte':>10} {'vs cold':>8} {'book':>8} {'sing.
 print(hdr); print("-" * len(hdr))
 print(f"{'cold (0 B)':>12} {cold_fert:>10.4f} {'—':>8} {'—':>8} {'—':>6}")
 
+# v0.6.0 protocol correction (P0-1): the v0.5.0 run fed the probe INTO the
+# warming engine at every scale (and re-fed pool[:s] cumulatively), so the
+# "held-out" probe had been ingested up to 8 times before its last
+# measurement. Fixed protocol: ONE warming engine fed each new prefix
+# exactly once (delta feeding); at every scale a snapshot is taken and the
+# probe is scored on a DISPOSABLE engine loaded from it — the probe never
+# touches the warming engine, and the snapshot path itself is exercised
+# every run.
 eng = ratec.RateC(c=20, store_book=True)
+prev = 0
+fed_total = 0
 for s in SCALES:
-    eng.encode_to_spans(TRAIN_POOL[:s])       # adaptation continues (deployment)
-    ids = eng.encode_to_spans(PROBE)          # then the unseen probe
+    if s > prev:
+        seg = TRAIN_POOL[prev:s]              # only the unseen delta
+        eng.encode_to_spans(seg)
+        fed_total += len(seg)
+    prev = s
+    probe_eng = ratec.RateC.from_state(eng.save_state())
+    ids = probe_eng.encode_to_spans(PROBE)    # held out by construction
     fert = len(ids) / len(PROBE)
-    book, sing = book_stats(eng, [sp[2] for sp in ids])
+    book, sing = book_stats(probe_eng, [sp[2] for sp in ids])
     rows.append({"arm": "ratec warm", "scale": s, "units_per_byte": fert,
-                 "book": book, "singleton_frac": sing})
+                 "book": book, "singleton_frac": sing,
+                 "bytes_seen": fed_total})
     gain = 100.0 * (cold_fert - fert) / cold_fert
     sing_s = "—" if sing is None else f"{sing:.2f}"
     print(f"{s:>12,} {fert:>10.4f} {gain:>+7.1f}% {book:>8,} {sing_s:>6}")
+    probe_eng = None
+eng = None
 
+tik_ver = None
 if tik is not None:
+    try:
+        tik_ver = _ilmd.version("tiktoken")
+    except _ilmd.PackageNotFoundError:
+        pass
     # tiktoken is byte-level: encode(s) tokenizes utf8(s) exactly, so the
     # token count equals the count over the raw probe bytes (all four
-    # domains are valid utf-8, same trick as bench_vs_tiktoken.py)
+    # domains are valid utf-8, same trick as bench_vs_tiktoken.py); the
+    # probe tail was UTF-8-trimmed once at load, so this cannot raise
     tfert = len(tik.encode_ordinary(PROBE.decode("utf-8"))) / len(PROBE)
     rows.append({"arm": "tiktoken r50k_base", "scale": None,
                  "units_per_byte": tfert})
@@ -152,15 +208,27 @@ if best:
     print(f"scale effect: cold {cold_fert:.4f} -> warm@{best['scale']:,} "
           f"{best['units_per_byte']:.4f} units/byte ({gain:+.1f}% vs cold)")
 
-out = {"protocol": {
+big = os.environ.get("RATEC_SCALE_DATA")
+record = {"protocol": {
            "c": 20,
            "corpus_kind": CORPUS_KIND,
            "probe_bytes": len(PROBE),
            "probe": "fixed tail of the corpus, disjoint from every prefix",
-           "adaptation": "one engine, encode_bytes continues through scales",
+           "adaptation": ("one warming engine fed each prefix exactly once "
+                          "(delta feeding, no re-ingestion); at every scale "
+                          "the probe is scored on a disposable engine loaded "
+                          "from a snapshot — the probe never touches the "
+                          "warming engine"),
            "scales": SCALES,
+           "ratec_version": ratec.__version__,
+           "tiktoken_version": tik_ver,
+           "corpus_sha256": hashlib.sha256(TRAIN_POOL + PROBE).hexdigest(),
        },
        "rows": rows}
+if big:
+    record["protocol"]["corpus_path"] = big
+    record["protocol"]["corpus_file_sha256"] = _CORPUS_FILE_SHA256
+out = record
 with open(os.path.join(OUT, "scale.json"), "w") as f:
     json.dump(out, f, indent=1)
 print(f"wrote {os.path.join(OUT, 'scale.json')}")

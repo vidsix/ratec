@@ -15,9 +15,11 @@ Full protocol is in the `twin_study.py` docstring; the committed
 
 **Setup.** d=96, 3 layers, 4 heads, ctx 256, batch 16, 600 steps, AdamW
 (3e-4, OneCycle), 2 torch threads. Identical 15,811,609-B train corpus and
-659,473-B held-out val stream for every arm. Eval is full-coverage
-byte-weighted BPB on the identical val bytes (coverage asserted 100.00%
-per arm — this fixed two earlier byte-weighting bugs, see
+659,473-B held-out val stream for every arm. Eval is byte-weighted BPB on
+the identical val bytes, covering every val byte **except each domain's
+first token** (a domain's first token has no in-domain predecessor, so it
+is never a prediction target — measured coverage is val_bytes − domains,
+asserted in code; this fixed two earlier byte-weighting bugs, see
 `twin_reeval.py`).
 
 **Arms.** `bpe` (tied 9472-row embedding/head, 1.27M params) /

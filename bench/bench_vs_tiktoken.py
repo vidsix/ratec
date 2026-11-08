@@ -3,9 +3,10 @@
 the speed2 bake-off (scored spans after 32768B warm edge, medians).
 
 Arms:
-  tiktoken r50k_base / cl100k_base / o200k_base   encode_ordinary (25 reps)
-  ratec lib (this engine, pf default)             fresh engine per rep (31 reps)
+  tiktoken r50k_base / cl100k_base / o200k_base   encode_ordinary (21 reps)
+  ratec lib (this engine, pf=2 = resolved library default)   pool steady-state, 21 reps
   ratec lib batch(threads=2) vs tiktoken encode_ordinary_batch(num_threads=2)
+    (batch arms also interleaved round-robin, 9 reps each, medians)
 
 Also: prefetch-depth sweep pf 0..4 on english (validates the library default).
 Outputs: bench.json, bench.csv, fig12_lib.png in OUT.
@@ -15,6 +16,7 @@ import os
 import statistics
 import sys
 import time
+from importlib import metadata as _ilmd
 
 import numpy as np
 
@@ -29,6 +31,16 @@ FIXTURES = os.environ.get(
 OUT = os.environ.get("RATEC_OUT") or os.path.join(os.getcwd(), "results")
 os.makedirs(OUT, exist_ok=True)
 DOMAINS = ["english", "code", "chinese", "base64"]
+PF = 2                # ratec arm prefetch depth (the resolved library default)
+REPS = 21             # interleaved single-thread reps per arm (actual loop count)
+BATCH_REPS = 9        # interleaved batch reps per arm
+PF_REPS = 15          # reps per point of the pf sweep
+
+def _pkg_version(name):
+    try:
+        return _ilmd.version(name)
+    except _ilmd.PackageNotFoundError:
+        return None
 
 # scored spans ship with the repo (identical bytes everywhere)
 spans = {dom: open(os.path.join(FIXTURES, f"{dom}.span.bin"), "rb").read()
@@ -57,14 +69,14 @@ print("spans:", {d: len(spans[d]) for d in DOMAINS})
 import tiktoken
 TENC = [("bpe50k", "r50k_base"), ("cl100k", "cl100k_base"), ("o200k", "o200k_base")]
 tokencs = [(k, tiktoken.get_encoding(n)) for k, n in TENC]
-rtok = ratec.RateC(c=20, store_book=False, pf=2)          # pool: reused, reset per rep
+rtok = ratec.RateC(c=20, store_book=False, pf=PF)         # pool: reused, reset per rep
 rtext = {d: spans[d].decode("utf-8") for d in DOMAINS}
 tids = {d: {k: None for k, _ in tokencs} for d in DOMAINS}
 runtimes = {d: {k: [] for k, _ in tokencs} for d in DOMAINS}
 runtimes_r = {d: [] for d in DOMAINS}
 rcold = {d: [] for d in DOMAINS}
 
-for rep in range(21):
+for rep in range(REPS):
     for d in DOMAINS:
         text = rtext[d]
         data = spans[d]
@@ -82,19 +94,15 @@ for rep in range(21):
         runtimes_r[d].append((time.perf_counter_ns() - t0) / 1e9)
         if rep >= 1 and rep % 5 == 1:                      # cold sample
             t0 = time.perf_counter_ns()
-            ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(data)
+            ratec.RateC(c=20, store_book=False, pf=PF).encode_to_spans(data)
             rcold[d].append((time.perf_counter_ns() - t0) / 1e9)
-    if rep == 0:
-        # exactness gate once per domain on the pool engine
-        for d in DOMAINS:
-            sp = rtok.encode_to_spans(spans[d]) if False else None
 
 # exactness: fresh engine per domain vs reference starts (shipped C=20 golden,
 # or the private bake-off cache when RATEC_BAKEOFF_CACHE is set)
 exactness = {}
 for d in DOMAINS:
     ref = _golden(d)
-    sp = ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(spans[d])
+    sp = ratec.RateC(c=20, store_book=False, pf=PF).encode_to_spans(spans[d])
     exactness[d] = None if ref is None else bool(np.array_equal(
         np.array([s for s, _, _ in sp], dtype=np.int64), ref.astype(np.int64)))
 
@@ -104,12 +112,11 @@ for d in DOMAINS:
     for k, _ in tokencs:
         res2[d][k] = {"med_s": med(runtimes[d][k]), "units": tids[d][k]}
     res2[d]["ratec"] = {"med_s": med(runtimes_r[d]), "units": None,
-                        "exact": exactness[d], "pf": 2,
+                        "exact": exactness[d], "pf": PF,
                         "cold_med_s": med(rcold[d]) if rcold[d] else None}
-    res2[d]["ratec"]["units"] = len(rtok.encode_to_spans(spans[d])) if False else None
-# units: take from a fresh pass (already computed in exactness loop; recompute cheaply)
+# units: from a fresh exactness-style pass (fresh engine per domain)
 for d in DOMAINS:
-    sp = ratec.RateC(c=20, store_book=False, pf=2).encode_to_spans(spans[d])
+    sp = ratec.RateC(c=20, store_book=False, pf=PF).encode_to_spans(spans[d])
     res2[d]["ratec"]["units"] = len(sp)
 res = res2
 
@@ -134,21 +141,28 @@ for dom, (starts, n) in zip(DOMAINS, tokbatch):
     ref = _golden(dom)
     if ref is not None:
         assert bool(np.array_equal(starts.astype(np.int64), ref.astype(np.int64))), dom
-t0 = time.perf_counter()
-for _ in range(9):
-    ratec.batch_spans(docs, c=20, threads=2)
-ratec_batch_s = (time.perf_counter() - t0) / 9
 
 enc = tiktoken.get_encoding("r50k_base")
 texts = [spans[d].decode("utf-8") for d in DOMAINS]
+# batch arms timed INTERLEAVED (round-robin reps, medians) — the same drift
+# discipline as the single-thread arms; timing them back-to-back would bias
+# whoever runs second (exactly the docstring warning at the top of the file)
+ratec.batch_spans(docs, c=20, threads=2)             # warm both paths once
 enc.encode_ordinary_batch(texts, num_threads=2)
-t0 = time.perf_counter()
-for _ in range(9):
+ratec_ts, tik_ts = [], []
+for _ in range(BATCH_REPS):
+    t0 = time.perf_counter()
+    ratec.batch_spans(docs, c=20, threads=2)
+    ratec_ts.append(time.perf_counter() - t0)
+    t0 = time.perf_counter()
     enc.encode_ordinary_batch(texts, num_threads=2)
-tik_batch_s = (time.perf_counter() - t0) / 9
+    tik_ts.append(time.perf_counter() - t0)
+ratec_batch_s = med(ratec_ts)
+tik_batch_s = med(tik_ts)
 tot_b = sum(len(x) for x in docs)
-print(f"  batch x4 docs, 2 threads: ratec {tot_b/ratec_batch_s/1e6:.2f} MB/s "
-      f"({tb} patches) | tiktoken r50k {tot_b/tik_batch_s/1e6:.2f} MB/s")
+print(f"  batch x4 docs, 2 threads (interleaved, median of {BATCH_REPS}): "
+      f"ratec {tot_b/ratec_batch_s/1e6:.2f} MB/s ({tb} patches) | "
+      f"tiktoken r50k {tot_b/tik_batch_s/1e6:.2f} MB/s")
 
 # --------------------------------------------------------------- pf sweep
 print()
@@ -157,7 +171,7 @@ data = spans["english"]
 for pf in range(5):
     tok = ratec.RateC(c=20, store_book=False, pf=pf)
     ts = []
-    for _ in range(15):
+    for _ in range(PF_REPS):
         tok.reset()
         t0 = time.perf_counter_ns()
         tok.encode_to_spans(data)
@@ -192,16 +206,27 @@ print(f"\nratec/tiktoken r50k speedup: " +
 print(f"batch(2T) ratec/tiktoken: {tot_b/ratec_batch_s / (tot_b/tik_batch_s):.2f}x")
 
 json.dump({"protocol": {
-    "c_bits": 20, "pf": 3, "reps": {"tiktoken": 25, "ratec": 31},
+    "c_bits": 20, "pf": PF,
+    "reps": {"tiktoken_encode_ordinary": REPS, "ratec_pool": REPS,
+             "batch": BATCH_REPS, "pf_sweep": PF_REPS,
+             "ratec_cold_samples_per_domain": len(rcold["english"])},
+    "timing": "round-robin interleaved within one process, medians; "
+              "batch arms interleaved too",
     "input": "bake-off scored spans (shipped fixtures; or RATEC_BAKEOFF_DATA + RATEC_BAKEOFF_CACHE)",
     "golden_mode": "shipped C=20 starts" if any(v is not None for v in exactness.values()) else "none (exactness not asserted)",
-    "ratec_arm": "ratec engine, pool steady-state (in-place reset, reset cost included), store_book=False, pf=2, prebits=21",
+    "ratec_arm": f"ratec engine, pool steady-state (in-place reset, reset cost "
+                 f"included), store_book=False, pf={PF}, prebits=16 "
+                 f"(library default)",
+    "ratec_version": ratec.__version__,
+    "tiktoken_version": _pkg_version("tiktoken"),
+    "numpy_version": _pkg_version("numpy"),
     "exactness": {d: res[d]["ratec"]["exact"] for d in DOMAINS}},
     "per_domain": res, "overall": overall,
     "speedup_vs_r50k": speed,
     "batch_2t": {"ratec_MBps": tot_b / ratec_batch_s / 1e6,
                   "tiktoken_MBps": tot_b / tik_batch_s / 1e6,
                   "ratio": (tot_b / ratec_batch_s) / (tot_b / tik_batch_s),
+                  "reps": BATCH_REPS, "timing": "interleaved, median",
                   "exact": True},
     "pf_sweep_english": {str(k): {"med_s": v, "MBps": len(data) / v / 1e6}
                           for k, v in pf_tab.items()}},
@@ -226,7 +251,12 @@ with open(f"{OUT}/bench.csv", "w") as f:
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.font_manager as fm
-fm.fontManager.addfont('/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf')
+for _fp in ("/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",):
+    if os.path.exists(_fp):
+        try:
+            fm.fontManager.addfont(_fp)
+        except Exception:
+            pass                      # labels are ASCII; missing font is fine
 import matplotlib.pyplot as plt
 plt.rcParams['font.sans-serif'] = ['Noto Sans SC', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
@@ -234,7 +264,7 @@ plt.rcParams['axes.unicode_minus'] = False
 C = {"bpe50k": "#888888", "cl100k": "#AAAAAA", "o200k": "#CCCCCC",
      "ratec": "#B03A2E", "ratec_b": "#E74C3C", "tik_b": "#555555"}
 LBL = {"bpe50k": "tiktoken r50k", "cl100k": "tiktoken cl100k",
-       "o200k": "tiktoken o200k", "ratec": "RateC lib 0.1"}
+       "o200k": "tiktoken o200k", "ratec": f"RateC lib {ratec.__version__}"}
 
 fig, axes = plt.subplots(1, 3, figsize=(14.6, 4.3), constrained_layout=True)
 ax = axes[0]

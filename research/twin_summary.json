@@ -1,94 +1,94 @@
 {
-  "protocol": {
-    "compute_matched": "same d/layers/ctx/batch/steps/lr/seed; arms differ in bytes-per-token so the same FLOPs buy different unique-byte coverage",
-    "byte_budget": "identical 15,811,609-B train corpus and 659,473-B val stream for all arms",
-    "eval": "full-coverage byte-weighted BPB on the identical val bytes (fixes the previous subsample parity gap)"
+ "protocol": {
+  "compute_matched": "same d/layers/ctx/batch/steps/lr/seed; arms differ in bytes-per-token so the same FLOPs buy different unique-byte coverage",
+  "byte_budget": "identical 15,811,609-B train corpus and 659,473-B val stream for all arms",
+  "eval": "byte-weighted BPB on the identical val bytes; every val byte except each domain's first token is a target exactly once (coverage asserted in code)"
+ },
+ "arms": [
+  "bpe",
+  "bytes",
+  "ratec_direct",
+  "ratec"
+ ],
+ "identical": {
+  "train_bytes": 15811609,
+  "val_bytes": 659473,
+  "arch": "d=96 layers=3 heads=4 ctx=256 batch=16",
+  "steps": 600,
+  "lr": 0.0003,
+  "seed": 42,
+  "compute_matched": true,
+  "eval": "full byte-weighted BPB on the identical 659,473-B val stream; byte weights = lens of domain-local target positions; every val byte except each domain's first token is a target exactly once (asserted covered >= val_bytes - domains per arm)",
+  "checkpoints": "runs/twin_{kind}.pt (deterministic seed-42 weights)"
+ },
+ "results": {
+  "bpe": {
+   "params": 1269600,
+   "val_bytes_per_token": 3.039508312323994,
+   "final_bpb_overall": 3.1116900979595763,
+   "final_bpb_per_domain": {
+    "en": 2.7340181274675825,
+    "hr": 3.2190049505188045,
+    "zh": 3.3352124768182017,
+    "code": 3.4874135972801095
+   },
+   "val_coverage": 0.9999939345507701,
+   "train_flops_est": 18721013760000,
+   "wall_sec": 295.9121685028076,
+   "interface": "tied embedding/head over 9472 rows"
   },
-  "arms": [
-    "bpe",
-    "bytes",
-    "ratec_direct",
-    "ratec"
-  ],
-  "identical": {
-    "train_bytes": 15811609,
-    "val_bytes": 659473,
-    "arch": "d=96 layers=3 heads=4 ctx=256 batch=16",
-    "steps": 600,
-    "lr": 0.0003,
-    "seed": 42,
-    "compute_matched": true,
-    "eval": "full-coverage byte-weighted BPB on the identical 659,473-B val stream; byte weights = lens of domain-local target positions; coverage asserted 100.00% for every arm",
-    "checkpoints": "runs/twin_{kind}.pt (deterministic seed-42 weights)"
+  "bytes": {
+   "params": 384864,
+   "val_bytes_per_token": 1.0,
+   "final_bpb_overall": 4.146817515128131,
+   "final_bpb_per_domain": {
+    "en": 3.7028759125301725,
+    "hr": 4.055225056751577,
+    "zh": 5.036180092633589,
+    "code": 4.347904839571703
+   },
+   "val_coverage": 0.9999939345507701,
+   "train_flops_est": 5675050598400,
+   "wall_sec": 137.69077682495117,
+   "interface": "tied embedding/head over 256 rows (raw-byte floor)"
   },
-  "results": {
-    "bpe": {
-      "params": 1269600,
-      "val_bytes_per_token": 3.039508312323994,
-      "final_bpb_overall": 3.1116900979595763,
-      "final_bpb_per_domain": {
-        "en": 2.7340181274675825,
-        "hr": 3.2190049505188045,
-        "zh": 3.3352124768182017,
-        "code": 3.4874135972801095
-      },
-      "val_coverage": 0.9999939345507701,
-      "train_flops_est": 18721013760000,
-      "wall_sec": 295.9121685028076,
-      "interface": "tied embedding/head over 9472 rows"
-    },
-    "bytes": {
-      "params": 384864,
-      "val_bytes_per_token": 1.0,
-      "final_bpb_overall": 4.146817515128131,
-      "final_bpb_per_domain": {
-        "en": 3.7028759125301725,
-        "hr": 4.055225056751577,
-        "zh": 5.036180092633589,
-        "code": 4.347904839571703
-      },
-      "val_coverage": 0.9999939345507701,
-      "train_flops_est": 5675050598400,
-      "wall_sec": 137.69077682495117,
-      "interface": "tied embedding/head over 256 rows (raw-byte floor)"
-    },
-    "ratec_direct": {
-      "params": 1269600,
-      "val_bytes_per_token": 1.3967121384443018,
-      "final_bpb_overall": 4.7958353435220165,
-      "final_bpb_per_domain": {
-        "en": 4.561721490013166,
-        "hr": 4.867545978183066,
-        "zh": 5.285769259125739,
-        "code": 4.8198979585286965
-      },
-      "val_coverage": 0.9999924181884626,
-      "train_flops_est": 18721013760000,
-      "wall_sec": 279.06133937835693,
-      "interface": "tied embedding/head over 9472 rows on the SAME RateC C=10 patch ids as 'ratec' (isolates interface cost)"
-    },
-    "ratec": {
-      "params": 1405248,
-      "val_bytes_per_token": 1.3967121384443018,
-      "final_bpb_overall": 4.815591679147973,
-      "final_bpb_per_domain": {
-        "en": 4.5450069173147,
-        "hr": 4.909815933900074,
-        "zh": 5.316357164882425,
-        "code": 4.875177302051341
-      },
-      "val_coverage": 0.9999924181884626,
-      "train_flops_est": 20721224908800,
-      "wall_sec": 289.06532645225525,
-      "interface": "factorized input (256+2^10 content rows, 12 length rows @32, in_proj) + untied head over 9472; C=10 patch ids"
-    }
+  "ratec_direct": {
+   "params": 1269600,
+   "val_bytes_per_token": 1.3967121384443018,
+   "final_bpb_overall": 4.7958353435220165,
+   "final_bpb_per_domain": {
+    "en": 4.561721490013166,
+    "hr": 4.867545978183066,
+    "zh": 5.285769259125739,
+    "code": 4.8198979585286965
+   },
+   "val_coverage": 0.9999924181884626,
+   "train_flops_est": 18721013760000,
+   "wall_sec": 279.06133937835693,
+   "interface": "tied embedding/head over 9472 rows on the SAME RateC C=10 patch ids as 'ratec' (isolates interface cost)"
   },
-  "findings": [
-    "interface cost ~ 0.02 BPB: factorized (4.816) vs direct tied (4.796) on the same C=10 patch ids",
-    "tokenization gap is the whole story: BPE 3.112 vs RateC C=10 4.80-4.82 vs raw bytes 4.147 BPB (compute-matched)",
-    "raw bytes beat RateC C=10 patches at this scale in every domain, despite 102 B less context per window",
-    "hypothesis: long-tail patch-type frequency (C=10 book singletons ~30-65% in the early bake-off) starves tiny embeddings; bpe tokens average ~528 train samples/type, ratec ~267 with heavy singletons, bytes ~9,600",
-    "caveat: 600 steps / 1.3M params is tiny; patch-based interfaces (MegaByte/BLT) close such gaps with scale + local models \u2014 this study quantifies the starting deficit, it does not bound the method",
-    "next levers: frequency-aware book pruning, C sweep for the LM optimum (not the tokenizer optimum), scale"
-  ]
+  "ratec": {
+   "params": 1405248,
+   "val_bytes_per_token": 1.3967121384443018,
+   "final_bpb_overall": 4.815591679147973,
+   "final_bpb_per_domain": {
+    "en": 4.5450069173147,
+    "hr": 4.909815933900074,
+    "zh": 5.316357164882425,
+    "code": 4.875177302051341
+   },
+   "val_coverage": 0.9999924181884626,
+   "train_flops_est": 20721224908800,
+   "wall_sec": 289.06532645225525,
+   "interface": "factorized input (256+2^10 content rows, 12 length rows @32, in_proj) + untied head over 9472; C=10 patch ids"
+  }
+ },
+ "findings": [
+  "interface cost ~ 0.02 BPB: factorized (4.816) vs direct tied (4.796) on the same C=10 patch ids",
+  "tokenization gap is the whole story: BPE 3.112 vs RateC C=10 4.80-4.82 vs raw bytes 4.147 BPB (compute-matched)",
+  "raw bytes beat RateC C=10 patches at this scale in every domain, despite 102 B less context per window",
+  "hypothesis: long-tail patch-type frequency (C=10 book singletons ~30-65% in the early bake-off) starves tiny embeddings; bpe tokens average ~528 train samples/type, ratec ~267 with heavy singletons, bytes ~9,600",
+  "caveat: 600 steps / 1.3M params is tiny; patch-based interfaces (MegaByte/BLT) close such gaps with scale + local models \u2014 this study quantifies the starting deficit, it does not bound the method",
+  "next levers: frequency-aware book pruning, C sweep for the LM optimum (not the tokenizer optimum), scale"
+ ]
 }

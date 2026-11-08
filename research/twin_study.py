@@ -47,7 +47,10 @@ import torch.nn.functional as F
 RUNS = os.environ.get("RATEC_RUNS", "../runs")
 DATA = os.environ.get("RATEC_TWIN_DATA", "../data")
 DOMAINS = ["en", "hr", "zh", "code"]
-V = 256 + 9 * (2 ** 10)     # 9472
+V = 256 + 9 * (2 ** 10)     # 9472; length rows cap patches at 9 bytes
+                            # (len_idx <= 9) — a deliberate divergence from
+                            # the library patcher, which can emit longer
+                            # patches; asserted on every loaded stream
 C = 10                      # ratec arm patch budget (2^C content rows)
 
 
@@ -160,10 +163,12 @@ def n_params(m):
 # --------------------------------------------------------------------- eval
 @torch.no_grad()
 def eval_full(model, va_flat, va_lens, bounds, ctx):
-    """Full-coverage byte-weighted BPB: every val token after each domain's
-    first token is a prediction target exactly once; bytes counted via lens.
-    va_flat: concatenated val token ids; bounds: per-domain token boundaries
-    into it; va_lens: list of per-domain byte-length arrays."""
+    """Byte-weighted BPB over every val byte EXCEPT each domain's first
+    token (that token has no in-domain predecessor to predict it from, so
+    it is never a target — see the coverage assert in main()). Bytes are
+    counted via lens. va_flat: concatenated val token ids; bounds:
+    per-domain token boundaries into it; va_lens: list of per-domain
+    byte-length arrays."""
     model.eval()
     overall_bits = overall_bytes = 0.0
     per = {}
@@ -253,6 +258,14 @@ def main():
     assert train_bytes == 15_811_609, train_bytes
     assert val_bytes == 659_473, val_bytes
 
+    # patch-id range: the length-row cap means no stream id may reach V
+    # (would be an out-of-range embedding lookup anyway — assert the
+    # producer honored the documented <=9-byte patch cap)
+    if args.kind != "bytes":
+        va_max = max(int(a.max()) for a in va_ids)
+        assert int(tr_ids.max()) < V and va_max < V, \
+            "stream id >= V: patch-length cap violated"
+
     interface = {
         "bpe": "tied embedding/head over 9472 rows",
         "ratec": f"factorized input (256+2^{C} content rows, {2+C} length rows @32, "
@@ -327,6 +340,11 @@ def main():
     wall = time.time() - t0
     va_flat = np.concatenate(va_ids)
     bpb, per_dom, covered = eval_full(model, va_flat, va_lens, bounds, args.ctx)
+    # coverage is exact-by-construction but assert it, never assume it:
+    # every val byte except each domain's first token is a target exactly
+    # once (the first token of a domain has no in-domain predecessor)
+    assert covered >= val_bytes - len(DOMAINS), \
+        f"coverage hole: {covered} of {val_bytes} bytes covered"
     nominal_tokens = args.steps * args.batch * args.ctx
     res = {
         "kind": args.kind, "interface": interface,
@@ -341,6 +359,9 @@ def main():
         "final_bpb_per_domain": per_dom,
         "val_bytes_covered": covered,
         "val_coverage": covered / val_bytes,
+        "val_coverage_note": "every val byte except each domain's first "
+                             "token (that token is never a target); "
+                             "asserted covered >= val_bytes - domains",
         "train_flops_est": 6 * params * nominal_tokens,
         "flops_per_train_byte_est": 6 * params * nominal_tokens / train_bytes,
         "wall_sec": wall, "curve": curve,
@@ -350,8 +371,11 @@ def main():
                                "buy different unique-byte coverage",
             "byte_budget": "identical 15,811,609-B train corpus and "
                            "659,473-B val stream for all arms",
-            "eval": "full-coverage byte-weighted BPB on the identical val "
-                    "bytes (fixes the previous subsample parity gap)",
+            "eval": "byte-weighted BPB on the identical val bytes; every "
+                    "val byte except each domain's first token is a target "
+                    "exactly once (coverage asserted in code)",
+            "patch_len_cap": "ratec arms cap patches at 9 bytes (length "
+                             "rows 2^10, len_idx<=9); asserted max(id) < V",
         },
     }
     out = f"{RUNS}/twin_{args.kind}{args.tag}.json"

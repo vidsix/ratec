@@ -41,7 +41,8 @@ class RateC:
         round-trip without the source text. Turn off for bulk LM data prep
         (use `encode_to_spans`/`batch_spans`, which only need offsets).
     pf : int
-        Software prefetch depth (0-4). Default 3 (best on x86-64).
+        Software prefetch depth (0-4); -1 = auto, which resolves to the
+        measured default 2 on x86-64 (`PF_DEFAULT` in `_rcengine.c`).
     warm_state : bytes | str | None
         Snapshot bytes or path produced by `save_state` — cold-start is
         avoided and the judge starts already adapted (RateC's optional
@@ -281,8 +282,26 @@ def patch_from_sur(sur: np.ndarray | bytes, c: float,
     patcher (v0.4): each patch may spend the previous patch's unused
     budget (capped at +C extra); the long-run rate converges to exactly
     C bits/patch.
+
+    `sur` must be 1-D float32 (what `RateC.surprise` returns) or raw
+    float32 bytes. A float64 array is accepted and cast; any other dtype
+    is REJECTED — silently reinterpreting e.g. float64 bytes as float32
+    produced garbage patch starts (v0.6.0 dtype guard).
     """
-    raw = sur.tobytes() if isinstance(sur, np.ndarray) else bytes(sur)
+    if isinstance(sur, np.ndarray):
+        if sur.ndim != 1:
+            raise ValueError(
+                f"sur must be 1-D float32 surprisal, got shape {sur.shape}")
+        if sur.dtype == np.float64:
+            sur = sur.astype(np.float32)          # accepted, cast
+        elif sur.dtype != np.float32:
+            raise ValueError(
+                f"sur must be float32 surprisal, got dtype {sur.dtype} — "
+                "other dtypes are rejected because their bytes would be "
+                "silently reinterpreted as float32 (cast float64 explicitly)")
+        raw = sur.tobytes()
+    else:
+        raw = bytes(sur)
     return np.frombuffer(_rc.patch_from_sur(raw, float(c), bool(carry)),
                          dtype=np.uint32)
 

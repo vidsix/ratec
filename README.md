@@ -52,9 +52,11 @@ ratec.RateC(c=20, store_book=False)      \
 | new domain | out-of-vocabulary fury | just feed it |
 | LM interface | ids | ids **and** raw byte spans (the LM-visible structure) |
 
-Fertility (units per byte, C=20, this repo's bake-off corpora): ratec 0.20
-(en) / 0.29 (zh) / 0.50 (b64) vs tiktoken r50k 0.28 / 0.72 / 0.77 —
-**26–50% fewer LM positions** for the same bytes. On high-entropy streams
+Fertility (units per byte, C=20, this repo's bake-off corpora): ratec
+0.204 (en) / 0.292 (zh) / 0.500 (b64) vs tiktoken r50k 0.275 / 0.722 /
+0.770 — **26–60% fewer LM positions** (same numbers as the per-domain
+table in "What RateC buys" below; 0.204/0.275 = −26%, 0.292/0.722 =
+−60%, 0.500/0.770 = −35%). On high-entropy streams
 the credit carry-over patcher compounds the win: base64 0.500 → **0.384**
 units/byte (−23.2% patches; an independent replication measured −23%) —
 reproduce with `patch_from_sur(RateC(store_book=False).surprise(b64), 20,

@@ -2,9 +2,11 @@
 
     python -m ratec encode FILE [-o OUT.ids] [--c 20]
     python -m ratec decode IDS FILE.state -o out.bin
-    python -m ratec surprise FILE [-o OUT.f32]
+    python -m ratec surprise FILE [-o OUT.f32] [--c 20] [--patch]
     python -m ratec state FILE -o model.rcstate      # snapshot ("warm start")
     python -m ratec bench FILE [--reps 15]
+
+`--c` is a float everywhere (fractional budgets like 17.5 are first-class).
 """
 import argparse
 import sys
@@ -21,7 +23,7 @@ def main(argv=None):
 
     pe = sub.add_parser("encode", help="file -> ids (or span count with --spans)")
     pe.add_argument("file"); pe.add_argument("-o", "--out", default="-")
-    pe.add_argument("--c", type=int, default=20)
+    pe.add_argument("--c", type=float, default=20)
     pe.add_argument("--spans", action="store_true",
                     help="print spans instead of ids")
 
@@ -31,17 +33,18 @@ def main(argv=None):
 
     ps = sub.add_parser("surprise", help="file -> float32 surprisal")
     ps.add_argument("file"); ps.add_argument("-o", "--out", default="-")
+    ps.add_argument("--c", type=float, default=20)
     ps.add_argument("--patch", action="store_true",
                     help="also print patch count at --c")
 
     psx = sub.add_parser("state", help="build a warm-start snapshot")
     psx.add_argument("file", nargs="+")
     psx.add_argument("-o", "--out", required=True)
-    psx.add_argument("--c", type=int, default=20)
+    psx.add_argument("--c", type=float, default=20)
 
     pb = sub.add_parser("bench", help="throughput of this file")
     pb.add_argument("file"); pb.add_argument("--reps", type=int, default=15)
-    pb.add_argument("--c", type=int, default=20)
+    pb.add_argument("--c", type=float, default=20)
 
     a = p.parse_args(argv)
 
@@ -75,7 +78,7 @@ def main(argv=None):
         print(f"# decoded {len(ids)} patches -> {len(data)} bytes", file=sys.stderr)
 
     elif a.cmd == "surprise":
-        tok = RateC(c=a.c if hasattr(a, "c") else 20)
+        tok = RateC(c=a.c)
         data = open(a.file, "rb").read()
         sur = tok.surprise(data)
         raw = sur.tobytes()
@@ -86,7 +89,7 @@ def main(argv=None):
         if a.patch:
             starts = patch_from_sur(sur, a.c)
             print(f"# {len(data)} bytes -> {len(starts)} patches "
-                  f"(C={a.c})", file=sys.stderr)
+                  f"(C={a.c:g})", file=sys.stderr)
 
     elif a.cmd == "state":
         tok = RateC(c=a.c)

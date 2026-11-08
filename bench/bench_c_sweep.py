@@ -323,7 +323,13 @@ with open(f"{OUT}/c_sweep.csv", "w") as f:
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.font_manager as fm
-fm.fontManager.addfont('/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf')
+import os as _os
+for _fp in ("/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",):
+    if _os.path.exists(_fp):
+        try:
+            fm.fontManager.addfont(_fp)
+        except Exception:
+            pass                      # labels are ASCII; missing font is fine
 import matplotlib.pyplot as plt
 plt.rcParams['font.sans-serif'] = ['Noto Sans SC', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
