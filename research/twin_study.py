@@ -41,8 +41,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-RUNS = "/home/z/my-project/runs"
-DATA = "/home/z/my-project/data"
+# Tokenized streams (.npy) and checkpoints (.pt) are produced outside the
+# repo and are large; override both to rerun. The committed research/*.json
+# are the result records for the seed-42 run documented in this docstring.
+RUNS = os.environ.get("RATEC_RUNS", "../runs")
+DATA = os.environ.get("RATEC_TWIN_DATA", "../data")
 DOMAINS = ["en", "hr", "zh", "code"]
 V = 256 + 9 * (2 ** 10)     # 9472
 C = 10                      # ratec arm patch budget (2^C content rows)

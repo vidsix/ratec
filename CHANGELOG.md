@@ -1,22 +1,37 @@
 # Changelog
 
-## Unreleased — twin-study training-scale probe
+## v0.5.0 — 2026-11 (the design thesis, measured + CI)
 
-The singleton-starvation hypothesis (v0.4.1 finding) makes a testable
-prediction: more training steps ⇒ more samples per patch type ⇒ the
-BPE-vs-RateC gap narrows. Measured (same arms/arch/seed/bytes, 4× steps,
-OneCycle recomputed, identical full-coverage eval):
-
-- bpe 3.112 → **2.607** BPB (−0.505, −16.2%)
-- ratec_direct 4.796 → **3.818** BPB (−0.978, −20.4%)
-- tokenization gap **1.684 → 1.212 BPB (−28.1%)**; RateC improved
-  **1.94× more** than BPE for the same 4× compute
-- gap narrowed in every domain: en −25.1%, hr −23.6%, zh −35.5%,
-  code −31.1% relative
-
-Direction confirmed; trend not established (two points, 1.27M params, gap
-still large). `bytes` and factorized-`ratec` arms not re-run at this scale.
-Digest: `research/twin_probe_s2400.json`; record: `docs/twin_study.md`.
+- **Efficiency vs scale, measured** (`bench/bench_scale.py`, record in
+  `research/scale_mix15.8MB.json`): the design claim — BPE's fertility is
+  frozen at train time, RateC's adapts as it read — is now a number.
+  One engine, log-spaced adaptation prefixes, the same fixed 128 KB
+  held-out probe at every scale, C=20, 15.8 MB en/hr/zh/code mix:
+  cold 0.157 → 256 KB 0.082 (−48%) → 1 MB 0.076 units/byte (−52%),
+  saturating at ~0.076 through 8 MB while the book grows to 1.17 M
+  entries. tiktoken r50k_base on the same probe: 0.431 flat — warm
+  RateC holds 4.2–5.7× fewer LM positions (64 KB → 8 MB scales).
+  Portable by default (runs on the shipped fixtures; also smoke-verified
+  end-to-end on a fresh tree);
+  `RATEC_SCALE_DATA=<corpus>` for the full curve, `make scale`.
+- **Twin-study training-scale probe folded in** (same arms/arch/seed/bytes,
+  4× steps): bpe 3.112 → 2.607 BPB, ratec_direct 4.796 → 3.818 BPB —
+  the tokenization gap narrows 1.684 → 1.212 BPB (−28.1%); RateC improved
+  1.94× more than BPE for the same 4× compute, and the gap narrowed in
+  every domain. Direction confirmed; trend not established (two points,
+  1.27M params). Digest: `research/twin_probe_s2400.json`; record:
+  `docs/twin_study.md`.
+- **Portability completion of the straggler suites**: `test_smollm2_port.py`
+  **skips cleanly** without the optional `transformers` dependency
+  (`pip install 'ratec[lm]'`) so a fresh-clone `make pytest` is green with
+  zero extra installs; both straggler suites keep their sha256-bound
+  fixture assertions; `research/twin_study.py` resolves its data/run
+  directories from env vars (`RATEC_RUNS`, `RATEC_TWIN_DATA`) with
+  resumable `--tag`/`--ckpt_every` checkpoints for long runs.
+- **Subtree hygiene**: `ratec/.gitignore` (in-place extension, build/,
+  results/), so fresh clones stay clean after `make build`.
+- No engine changes: the default path is bit-identical to v0.4.1
+  (gate green on all four domains).
 
 ## v0.4.1 — 2026-11 (external-replication round)
 

@@ -13,8 +13,16 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ratec
-from ratec.smollm2 import (RateCTokenizer, encode_for_lm,
-                           build_smollm2_ratec_config, SMOLLM2_135M_KW)
+
+try:
+    from transformers import AutoTokenizer  # noqa: F401  (presence probe)
+    from ratec.smollm2 import (RateCTokenizer, encode_for_lm,
+                               build_smollm2_ratec_config, SMOLLM2_135M_KW)
+except ImportError as e:
+    print(f"SKIP: test_smollm2_port needs the optional `transformers` "
+          f"dependency ({e}); the tokenizer side needs no torch. "
+          f"Install with: pip install 'ratec[lm]' or pip install transformers")
+    sys.exit(0)
 
 FAILURES = []
 
@@ -26,9 +34,6 @@ def check(name, cond, extra=""):
         FAILURES.append(name)
 
 
-# the exact 320,000-B corpus ships with the repo (sha256-bound in
-# ../fixtures_meta.json — see scripts/ship_straggler_fixtures.py);
-# RATEC_FIXTURES overrides for author-local variants
 DATA = os.environ.get(
     "RATEC_FIXTURES",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fixtures"))

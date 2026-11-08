@@ -19,7 +19,12 @@ bench: build
 	$(PY) bench/bench_c_sweep.py
 	$(PY) bench/bench_vs_tiktoken.py
 
+# efficiency-vs-scale bench (portable fixtures by default; RATEC_SCALE_DATA
+# =<big file> for the full curve, e.g. a 16 MB pretraining mix)
+scale: build
+	$(PY) bench/bench_scale.py
+
 clean:
 	rm -rf build ratec.egg-info dist __pycache__ ratec/__pycache__ tests/__pycache__
 
-.PHONY: build test pytest bench clean
+.PHONY: build test pytest bench scale clean

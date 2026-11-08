@@ -49,14 +49,14 @@ def raises_ve(fn):
         return False
 
 
-# assets ship with the repo (sha256-bound in ../fixtures_meta.json — see
-# scripts/ship_straggler_fixtures.py); RATEC_FIXTURES overrides for
-# author-local variants
 DATA = os.environ.get(
     "RATEC_FIXTURES",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fixtures"))
 
 # ------------------------------------------------------------------- assets
+# assets ship with the repo (sha256-bound in ../fixtures_meta.json — see
+# scripts/ship_straggler_fixtures.py); RATEC_FIXTURES overrides for
+# author-local variants
 img = open(os.path.join(DATA, "ascent.raw"), "rb").read()
 fmeta = json.load(open(os.path.join(DATA, os.pardir, "fixtures_meta.json")))
 assert len(img) == fmeta["ascent_raw_len"] and \
@@ -138,8 +138,9 @@ check("f32: byte-plane separation reduces patch count",
       counts["f32"][1] < counts["f32"][0])
 check("u8_image: per-row delta reduces patch count",
       counts["u8_image"][1] < counts["u8_image"][0])
-# english.span.bin == english.txt[32768:32768+267232] (post-warm span), so its
-# first 20000 bytes are the same english.txt[32768:52768] slice as before
+# english scored span == english.txt[32768:] (see fixtures meta.json), so the
+# first 20,000 bytes of the shipped span are exactly the slice this check used
+# to read from an author-local corpus.
 sample = open(os.path.join(DATA, "english.span.bin"), "rb").read()[:20000]
 check("raw: identity keeps patch count identical",
       n_patches(apply("raw", sample)) == n_patches(sample))

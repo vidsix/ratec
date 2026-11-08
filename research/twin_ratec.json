@@ -1,0 +1,90 @@
+{
+  "kind": "ratec",
+  "interface": "factorized input (256+2^10 content rows, 12 length rows @32, in_proj) + untied head over 9472; C=10 patch ids",
+  "d": 96,
+  "layers": 3,
+  "ctx": 256,
+  "batch": 16,
+  "steps": 600,
+  "lr": 0.0003,
+  "seed": 42,
+  "params": 1405248,
+  "vocab_effective": 9472,
+  "train_bytes": 15811609,
+  "train_tokens": 10944452,
+  "val_bytes": 659473,
+  "val_tokens": 472161,
+  "val_bytes_per_token": 1.3967121384443018,
+  "train_bytes_per_ctx": 369.84692371989024,
+  "final_bpb_overall": 4.815591679147973,
+  "final_bpb_per_domain": {
+    "en": 4.5450069173147,
+    "hr": 4.909815933900074,
+    "zh": 5.316357164882425,
+    "code": 4.875177302051341
+  },
+  "val_bytes_covered": 659468,
+  "val_coverage": 0.9999924181884626,
+  "train_flops_est": 20721224908800,
+  "flops_per_train_byte_est": 1310507.0400362164,
+  "wall_sec": 289.06532645225525,
+  "curve": [
+    {
+      "step": 1,
+      "val_bpb_quick": 9.378399997937526
+    },
+    {
+      "step": 50,
+      "val_bpb_quick": 8.21500909400256
+    },
+    {
+      "step": 100,
+      "val_bpb_quick": 6.523782060905302
+    },
+    {
+      "step": 150,
+      "val_bpb_quick": 5.893202328033534
+    },
+    {
+      "step": 200,
+      "val_bpb_quick": 5.573927460306098
+    },
+    {
+      "step": 250,
+      "val_bpb_quick": 5.321916689251889
+    },
+    {
+      "step": 300,
+      "val_bpb_quick": 5.118282651400287
+    },
+    {
+      "step": 350,
+      "val_bpb_quick": 4.976458260386319
+    },
+    {
+      "step": 400,
+      "val_bpb_quick": 4.885163354916155
+    },
+    {
+      "step": 450,
+      "val_bpb_quick": 4.826794528541356
+    },
+    {
+      "step": 500,
+      "val_bpb_quick": 4.796817513840196
+    },
+    {
+      "step": 550,
+      "val_bpb_quick": 4.783348833310194
+    },
+    {
+      "step": 600,
+      "val_bpb_quick": 4.779492018704256
+    }
+  ],
+  "protocol": {
+    "compute_matched": "same d/layers/ctx/batch/steps/lr/seed; arms differ in bytes-per-token so the same FLOPs buy different unique-byte coverage",
+    "byte_budget": "identical 15,811,609-B train corpus and 659,473-B val stream for all arms",
+    "eval": "full-coverage byte-weighted BPB on the identical val bytes (fixes the previous subsample parity gap)"
+  }
+}

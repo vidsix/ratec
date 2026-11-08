@@ -18,5 +18,10 @@
   "warm_bytes": 32768,
   "scored_bytes": 260568,
   "span_sha256": "c187504d946ce16476a08543e820cd8b66ea048ea66d5c6fb600e716b4b6a92c"
+ },
+ "lm_corpus": {
+  "len": 320000,
+  "sha256": "d9b79620cb05d8c151ab9a8f0be90d753275f3f1569694db8f781f9724208d21",
+  "recipe": "english[:200000] + code[:60000] + chinese[:60000]"
  }
 }

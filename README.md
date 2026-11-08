@@ -6,7 +6,7 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.4.1, experimental. The C core and byte-level semantics are
+> **Status:** v0.5.0, experimental. The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the LM-side surface (`ratec.smollm2`)
 > and the patcher modes/servos are new and may still move. Code-first
 > repo: run `tests/` and `bench/` yourself — no benchmark claims against
@@ -185,6 +185,39 @@ the carry/deferred-performance record (incl. why the SIMD patcher is a
   slowdown and a clean error if truly exhausted. Engines are not
   thread-safe (use one per thread or `batch_spans`).
 
+## Efficiency vs scale (the design thesis, measured)
+
+BPE's fertility is frozen at train time — a fixed merge table performs
+identically on byte 1 and byte 10^12. RateC's judge and book adapt as they
+read, so its positions-per-byte on **held-out** data should improve with
+the size of the stream it has already adapted to. `bench/bench_scale.py`
+measures exactly that: one engine, log-spaced adaptation prefixes, the
+**same fixed 128 KB probe** (disjoint from every prefix) scored at each
+scale. On a 15.8 MB en/hr/zh/code pretraining mix (C=20, full record in
+`research/scale_mix15.8MB.json`):
+
+| adaptation seen | units/byte (probe) | vs cold |
+|---|---|---|
+| 0 (cold engine) | 0.157 | — |
+| 64 KB | 0.102 | −35% |
+| 256 KB | 0.082 | −48% |
+| 1 MB | 0.076 | −52% |
+| 8 MB | 0.076 | −52% (saturated) |
+| tiktoken r50k_base (same probe) | 0.431 | flat by construction |
+
+Honest reading: the effect is real and front-loaded — −48 of the −52
+points arrive within the first 256 KB, and the curve saturates at ~0.076
+even though the book keeps growing (1.17 M entries at 8 MB, no further
+fertility benefit). A warm RateC holds **4.2–5.7× fewer LM positions**
+than tiktoken r50k_base on the same bytes (ratio over the 64 KB → 8 MB
+scales). This measures positions-per-byte, not LM quality — the quality
+question is the twin study's (`research/`), and its scale lever is still
+open.
+
+Reproduce: `RATEC_SCALE_DATA=<your-corpus> make scale` (portable shipped
+fixtures by default; the table above used the same 15.8 MB mix as the
+twin study).
+
 ## Performance (2-core sandbox, C=20)
 
 Controlled comparison (interleaved min-of-5, pooled steady-state,
@@ -238,7 +271,7 @@ paths to raw speed.
    single-threaded.
 5. **LM track (active):** twin-study training harness — same byte
    budget, RateC vs BPE vs raw bytes, measured on BPB / params /
-   FLOPs-per-byte. **First result (v0.4.1):**
+   FLOPs-per-byte. **First result (v0.4.1, `research/twin_summary.json`):**
    compute-matched at 1.3M params on identical 15.8M train / 659k val bytes,
    BPE 3.112 < raw bytes 4.147 < RateC C=10 4.80–4.82 BPB; the factorized
    interface is free (Δ 0.02 BPB vs direct ids) — the tokenization gap is
@@ -265,6 +298,12 @@ paths to raw speed.
     byte-exactly on any machine, parallel-fertility is informational
     (tiling/determinism stay hard), `conftest.py` + `make test` for the
     first-run experience.
+12. **~~Efficiency vs scale, tokenizer side~~ measured (v0.5.0)** —
+    adaptation improves held-out fertility −52% with a 256 KB-scale
+    knee and a ~0.076 units/byte floor (5.7× under tiktoken r50k);
+    saturated by ~1 MB. Numbers, honest caveats and reproduce command
+    in the section above; record in `research/scale_mix15.8MB.json`.
+    LM-side scale (BPB vs training scale) remains open.
 
 ## Layout
 
@@ -285,6 +324,7 @@ tests/
 bench/
   bench_vs_tiktoken.py   fertility table above, reproducible
   bench_c_sweep.py       tokens/byte + MB/s across C, golden-verified per C
+  bench_scale.py         efficiency vs adaptation scale (the thesis, measured)
 docs/
   smollm2_port.md    the LM port, precisely
   PROFILING.md       the ablation profile behind the v2 engine
@@ -292,8 +332,9 @@ docs/
   twin_study.md      the paired BPE-vs-RateC LM experiment, with numbers
   container.md       container format spec (draft v0.1)
 research/
-  twin_summary.json  machine-readable twin-study digest
-  twin_study.py      the exact twin-study harness (protocol audit)
+  twin_study.py      the twin-study harness (protocol in the docstring)
+  twin_*.json        committed result records (seed-42 run + scale probe)
+  scale_mix15.8MB.json   efficiency-vs-scale record behind the table above
 ```
 
 Rebuild in place:

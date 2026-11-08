@@ -1,11 +1,13 @@
+# .gitignore — build artifacts (the extension is built in place by
+# `make build` / conftest.py; nothing compiled ships in the repo)
 build/
-ratec.egg-info/
-__pycache__/
+dist/
+*.egg-info/
 *.so
 *.pyd
-dist/
-*.egg-info
+__pycache__/
 .venv/
 .pytest_cache/
+results/
 experiments/data/
 experiments/runs/

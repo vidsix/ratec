@@ -1,0 +1,90 @@
+{
+  "kind": "bytes",
+  "interface": "tied embedding/head over 256 rows (raw-byte floor)",
+  "d": 96,
+  "layers": 3,
+  "ctx": 256,
+  "batch": 16,
+  "steps": 600,
+  "lr": 0.0003,
+  "seed": 42,
+  "params": 384864,
+  "vocab_effective": 256,
+  "train_bytes": 15811609,
+  "train_tokens": 15811609,
+  "val_bytes": 659473,
+  "val_tokens": 659473,
+  "val_bytes_per_token": 1.0,
+  "train_bytes_per_ctx": 256.0,
+  "final_bpb_overall": 4.146817515128131,
+  "final_bpb_per_domain": {
+    "en": 3.7028759125301725,
+    "hr": 4.055225056751577,
+    "zh": 5.036180092633589,
+    "code": 4.347904839571703
+  },
+  "val_bytes_covered": 659469,
+  "val_coverage": 0.9999939345507701,
+  "train_flops_est": 5675050598400,
+  "flops_per_train_byte_est": 358916.70470728184,
+  "wall_sec": 137.69077682495117,
+  "curve": [
+    {
+      "step": 1,
+      "val_bpb_quick": 7.947433828753094
+    },
+    {
+      "step": 50,
+      "val_bpb_quick": 6.549606405302535
+    },
+    {
+      "step": 100,
+      "val_bpb_quick": 5.27217314964117
+    },
+    {
+      "step": 150,
+      "val_bpb_quick": 4.8154282303743585
+    },
+    {
+      "step": 200,
+      "val_bpb_quick": 4.564898550787637
+    },
+    {
+      "step": 250,
+      "val_bpb_quick": 4.388467365087465
+    },
+    {
+      "step": 300,
+      "val_bpb_quick": 4.294795676164849
+    },
+    {
+      "step": 350,
+      "val_bpb_quick": 4.2273329535196
+    },
+    {
+      "step": 400,
+      "val_bpb_quick": 4.184039550603822
+    },
+    {
+      "step": 450,
+      "val_bpb_quick": 4.158331262233645
+    },
+    {
+      "step": 500,
+      "val_bpb_quick": 4.140486852512804
+    },
+    {
+      "step": 550,
+      "val_bpb_quick": 4.133785260000894
+    },
+    {
+      "step": 600,
+      "val_bpb_quick": 4.1306576074555865
+    }
+  ],
+  "protocol": {
+    "compute_matched": "same d/layers/ctx/batch/steps/lr/seed; arms differ in bytes-per-token so the same FLOPs buy different unique-byte coverage",
+    "byte_budget": "identical 15,811,609-B train corpus and 659,473-B val stream for all arms",
+    "eval": "full-coverage byte-weighted BPB on the identical val bytes (fixes the previous subsample parity gap)"
+  }
+}

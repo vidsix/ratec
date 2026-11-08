@@ -1,0 +1,99 @@
+{
+ "protocol": {
+  "c": 20,
+  "corpus_kind": "RATEC_SCALE_DATA",
+  "probe_bytes": 131072,
+  "probe": "fixed tail of the corpus, disjoint from every prefix",
+  "adaptation": "one engine, encode_bytes continues through scales",
+  "scales": [
+   32000,
+   64000,
+   128000,
+   256000,
+   512000,
+   1048576,
+   2097152,
+   4194304,
+   8388608
+  ]
+ },
+ "rows": [
+  {
+   "arm": "ratec cold",
+   "scale": 0,
+   "units_per_byte": 0.1573333740234375,
+   "book": 0,
+   "singleton_frac": null
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 32000,
+   "units_per_byte": 0.15186309814453125,
+   "book": 15834,
+   "singleton_frac": 0.7361639369712024
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 64000,
+   "units_per_byte": 0.10181427001953125,
+   "book": 31812,
+   "singleton_frac": 0.8293115335368857
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 128000,
+   "units_per_byte": 0.08867645263671875,
+   "book": 52480,
+   "singleton_frac": 0.8548775153105862
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 256000,
+   "units_per_byte": 0.08184051513671875,
+   "book": 83139,
+   "singleton_frac": 0.8579337966780539
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 512000,
+   "units_per_byte": 0.07787322998046875,
+   "book": 133310,
+   "singleton_frac": 0.8580500560328727
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 1048576,
+   "units_per_byte": 0.07586669921875,
+   "book": 221316,
+   "singleton_frac": 0.8612612612612612
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 2097152,
+   "units_per_byte": 0.07489013671875,
+   "book": 379909,
+   "singleton_frac": 0.8500921295077652
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 4194304,
+   "units_per_byte": 0.074951171875,
+   "book": 662534,
+   "singleton_frac": 0.8451387018583356
+  },
+  {
+   "arm": "ratec warm",
+   "scale": 8388608,
+   "units_per_byte": 0.075958251953125,
+   "book": 1169988,
+   "singleton_frac": 0.831297812374178
+  },
+  {
+   "arm": "tiktoken r50k_base",
+   "scale": null,
+   "units_per_byte": 0.43115234375
+  }
+ ],
+ "corpus_file": "data/_train_mix.txt (15,811,609 B en/hr/zh/code LM mix, twin-study corpus)",
+ "note": "record of the v0.5.0 published run; portable re-run: bench/bench_scale.py (shipped fixtures)"
+}
