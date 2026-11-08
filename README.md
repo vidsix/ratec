@@ -330,6 +330,7 @@ docs/
   PROFILING.md       the ablation profile behind the v2 engine
   v04_design.md      what landed / was measured / was declined, with numbers
   twin_study.md      the paired BPE-vs-RateC LM experiment, with numbers
+  PLAN_v0.6.md       the next version's plan (from the full-repo review)
   container.md       container format spec (draft v0.1)
 research/
   twin_study.py      the twin-study harness (protocol in the docstring)
