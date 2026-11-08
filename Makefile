@@ -10,6 +10,7 @@ test: build
         $(PY) tests/test_profiles.py
         $(PY) tests/test_snapfuzz.py
         $(PY) tests/test_tables.py
+        $(PY) tests/test_fuzz.py
         $(PY) tests/gate_bitexact.py
 
 # pytest over the standalone scripts (conftest.py builds the engine first)

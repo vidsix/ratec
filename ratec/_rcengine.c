@@ -1220,9 +1220,12 @@ static PyObject *Engine_feedflush(EngineObj *self, PyObject *arg, int do_flush) 
         PyErr_SetString(RatecError, "context map exhausted; raise "
                         "map_capbits or encode in chunks");
     else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
-    /* any failed feed leaves the engine unusable: the pipelined judge may
-     * have advanced past the failing byte. reset() recovers. */
-    if (rc < 0) self->core->poisoned = 1;
+    /* A failed feed leaves the engine unusable: the pipelined judge may
+     * have advanced past the failing byte. reset() recovers. The -3 map
+     * exhaustion is the exception: it aborts BETWEEN bytes (the growth
+     * check runs after a byte completes, before the next), so the state
+     * is a valid streaming prefix and the engine stays usable. */
+    if (rc == -1 || rc == -2) self->core->poisoned = 1;
     return out;
 }
 
@@ -1310,12 +1313,16 @@ static PyObject *Engine_encode_bytes(EngineObj *self, PyObject *arg) {
     PyBuffer_Release(&view);
     self->busy = 0;
     if (rc != 0) {
-        self->core->poisoned = 1;
-        if (rc == -1) return PyErr_NoMemory();
-        if (rc == -3)
+        /* -1/-2 poison (mid-byte abort possible); -3 aborts between bytes
+         * and leaves a valid streaming prefix — see Engine_feedflush */
+        if (rc == -3) {
             PyErr_SetString(RatecError, "context map exhausted; raise "
                             "map_capbits or encode in chunks");
-        else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+            return NULL;
+        }
+        self->core->poisoned = 1;
+        if (rc == -1) return PyErr_NoMemory();
+        PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
         return NULL;
     }
     PyObject *out = PyList_New((Py_ssize_t)ids->n);
