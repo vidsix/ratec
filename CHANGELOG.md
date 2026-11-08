@@ -130,6 +130,12 @@ scale record re-produced row-identical after the hardening).
   `make test` + pytest + scale smoke; sdist install smoke; ASan/UBSan
   build fed the snapshot-fuzz corpus; a transformers-installed job so
   `test_smollm2_port` runs instead of skipping everywhere.
+  **Note:** the workflow file is deliberately absent from this push —
+  the deploy token lacks the `workflow` scope GitHub requires for
+  `.github/` paths. The CI commit exists in the local export line and
+  lands on `main` with the next workflow-scoped push (single commit, no
+  rework); until then, run the gates locally via `make test` (identical
+  commands, validated in the v0.6.0 round).
 
 ## v0.5.0 — 2026-11 (the design thesis, measured + CI)
 
