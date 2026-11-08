@@ -1,30 +1,31 @@
 PY ?= python3
 
 build:
-	$(PY) setup.py build_ext --inplace
+        $(PY) setup.py build_ext --inplace
 
-# full correctness pass: engine build + suite + bit-exactness gate
+# full correctness pass: engine build + suite + bit-exactness gate + snapshot fuzz
 test: build
-	$(PY) tests/test_ratec.py
-	$(PY) tests/test_v04.py
-	$(PY) tests/test_profiles.py
-	$(PY) tests/gate_bitexact.py
+        $(PY) tests/test_ratec.py
+        $(PY) tests/test_v04.py
+        $(PY) tests/test_profiles.py
+        $(PY) tests/test_snapfuzz.py
+        $(PY) tests/gate_bitexact.py
 
 # pytest over the standalone scripts (conftest.py builds the engine first)
 pytest: build
-	$(PY) -m pytest tests/ -q
+        $(PY) -m pytest tests/ -q
 
 # benches (tiktoken bench needs `pip install tiktoken`; C-sweep is tiktoken-free)
 bench: build
-	$(PY) bench/bench_c_sweep.py
-	$(PY) bench/bench_vs_tiktoken.py
+        $(PY) bench/bench_c_sweep.py
+        $(PY) bench/bench_vs_tiktoken.py
 
 # efficiency-vs-scale bench (portable fixtures by default; RATEC_SCALE_DATA
 # =<big file> for the full curve, e.g. a 16 MB pretraining mix)
 scale: build
-	$(PY) bench/bench_scale.py
+        $(PY) bench/bench_scale.py
 
 clean:
-	rm -rf build ratec.egg-info dist __pycache__ ratec/__pycache__ tests/__pycache__
+        rm -rf build ratec.egg-info dist __pycache__ ratec/__pycache__ tests/__pycache__
 
 .PHONY: build test pytest bench scale clean

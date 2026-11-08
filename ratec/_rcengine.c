@@ -41,6 +41,14 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
+/* v0.6.0: the SWAR paths and the snapshot format are little-endian by
+ * construction; big-endian targets are unsupported (README) — fail the
+ * build instead of producing silently wrong snapshots. */
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
+    __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error "ratec supports little-endian targets only"
+#endif
+
 #define NO 6
 static const double W[NO] = {0.02, 0.04, 0.08, 0.16, 0.30, 0.40};
 static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
@@ -50,7 +58,7 @@ static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
 #define WIN 16                  /* inline occurrence window (u16 counts) */
 #define IMAX 65535              /* max inline total (u16 window counts) */
 #define PROMOTED 0xFF           /* distinct marker: count map is author */
-#define RC_VERSION "0.5.0"
+#define RC_VERSION "0.6.0"
 #define PF_DEFAULT 2
 #define MAP_CAPBITS_DEFAULT 22
 #define ID_NONE 0xFFFFFFFFu
@@ -287,6 +295,7 @@ static int rd_get(RdBuf *r, void *dst, size_t len) {
     memcpy(dst, r->p + r->at, len); r->at += len; return 0;
 }
 #define rd_u8(r, v)   rd_get((r), (v), 1)
+#define rd_u16(r, v)  rd_get((r), (v), 2)
 #define rd_u32(r, v)  rd_get((r), (v), 4)
 #define rd_u64(r, v)  rd_get((r), (v), 8)
 #define rd_f64(r, v)  rd_get((r), (v), 8)
@@ -413,8 +422,17 @@ static void core_reset_keep(RcCore *e) {
     e->nseen = 0; e->n_forced = 0; e->n_patches = 0;
     e->poisoned = 0;
     e->book.n = 0; e->book.alen = 0;
-    uint64_t bmask = e->book.mask;
-    memset(e->book.hv, 0, (bmask + 1) * 4);
+    if (!e->book.hk || !e->book.hv) {
+        /* book tables were lost to an earlier OOM: re-init so the
+         * advertised "reset() recovers" is actually true */
+        free(e->book.hk); free(e->book.hv);
+        e->book.hk = NULL; e->book.hv = NULL;
+        book_init(&e->book);
+    } else {
+        e->book.err = 0;              /* reset clears a book-OOM flag too */
+        uint64_t bmask = e->book.mask;
+        memset(e->book.hv, 0, (bmask + 1) * 4);
+    }
 }
 
 /* pre-size the context map for an upcoming n-byte run (bench-kernel parity:
@@ -795,16 +813,25 @@ static int patch_from_sur_carry_core(const float *sur, size_t n, double C,
 #define RCST_MAGIC 0x54534352u                  /* "RCST" little-endian */
 #define RCST_VERSION 1u
 
+/* Snapshot format history:
+ *   v2..v4  integer-C engines (read path kept for backward compatibility)
+ *   v5      fractional C + carry mode (v0.4.0)
+ *   v6      v0.6.0: u16 per-row nonzero counter (the u8 counter silently
+ *           dropped rows with all 256 counts nonzero) + map_capbits is
+ *           serialized (a tuned engine used to restore as the default and
+ *           could hit map exhaustion later). Byte layout is otherwise the
+ *           v5 layout. load reads v2..v6. */
 static int save_core(RcCore *e, GrowBuf *g) {
-    uint32_t magic = RCST_MAGIC, ver = 5;
+    uint32_t magic = RCST_MAGIC, ver = 6;
     uint32_t sb = (uint32_t)e->store_book, pf = (uint32_t)e->pf;
     uint32_t fz = (uint32_t)e->fast;
     uint32_t poisoned = 0;
     uint8_t pm8 = (uint8_t)e->pmode;
+    uint8_t mcb = (uint8_t)e->map_capbits;
     if (gb_u32(g, &magic) || gb_u32(g, &ver) || gb_f64(g, &e->C) ||
         gb_u32(g, &sb) || gb_u32(g, &pf) || gb_u32(g, &fz) ||
         gb_u32(g, &poisoned) ||
-        gb_u8(g, &pm8) || gb_f64(g, &e->carry)) return -1;
+        gb_u8(g, &pm8) || gb_u8(g, &mcb) || gb_f64(g, &e->carry)) return -1;
     if (gb_u64(g, &e->nseen) || gb_u64(g, &e->n_forced) ||
         gb_u64(g, &e->n_patches)) return -1;
     /* patcher state */
@@ -832,10 +859,14 @@ static int save_core(RcCore *e, GrowBuf *g) {
         if (!any) continue;
         uint16_t c16 = (uint16_t)c;
         if (gb_put(g, &c16, 2)) return -1;
-        uint8_t nz[256]; uint32_t vals[256]; uint8_t m = 0;
+        /* v6: u16 nonzero counter — the u8 counter wrapped at a full row
+         * (256 nonzero counts) and silently dropped it (P1-4) */
+        uint8_t nz[256]; uint32_t vals[256]; int m = 0;
         for (int k = 0; k < 256; k++)
             if (row[k]) { nz[m] = (uint8_t)k; vals[m] = row[k]; m++; }
-        if (gb_u8(g, &m) || gb_put(g, nz, m) || gb_put(g, vals, (size_t)m * 4))
+        uint16_t m16 = (uint16_t)m;
+        if (gb_put(g, &m16, 2) || gb_put(g, nz, (size_t)m) ||
+            gb_put(g, vals, (size_t)m * 4))
             return -1;
     }
     /* maps */
@@ -868,9 +899,15 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     RdBuf r = { p, n, 0, 0 };
     uint32_t magic = 0, ver = 0, C32 = 0, sb = 0, pf = 0, fz = 0, poisoned = 0;
     double C = 20.0, carry = 0.0;
-    uint8_t pmode = 0;
+    uint8_t pmode = 0, mcb = (uint8_t)MAP_CAPBITS_DEFAULT;
     if (rd_u32(&r, &magic) || rd_u32(&r, &ver)) return NULL;
-    if (ver == 5) {                  /* v5: fractional C + carry mode */
+    if (ver == 6) {                  /* v6: v5 + serialized map_capbits,
+                                      * u16 per-row nonzero counter */
+        if (rd_f64(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
+            rd_u32(&r, &fz) || rd_u32(&r, &poisoned) ||
+            rd_u8(&r, &pmode) || rd_u8(&r, &mcb) || rd_f64(&r, &carry))
+            return NULL;
+    } else if (ver == 5) {           /* v5: fractional C + carry mode */
         if (rd_f64(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
             rd_u32(&r, &fz) || rd_u32(&r, &poisoned) ||
             rd_u8(&r, &pmode) || rd_f64(&r, &carry)) return NULL;
@@ -882,9 +919,14 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
         C = (double)C32;
     }
-    if (magic != RCST_MAGIC || ver < 2 || ver > 5) return NULL;
+    if (magic != RCST_MAGIC || ver < 2 || ver > 6) return NULL;
+    /* header sanity (P1-6): reject absurd/NaN tuning and flag fields before
+     * they can reach the engine (NaN already fails the range compares) */
+    if (sb > 1 || pf > 4 || fz > 1 || poisoned > 1 || pmode > 1) return NULL;
+    if (mcb < 8 || mcb > 26) return NULL;
     if (!(C >= 1.0 && C <= 64.0)) return NULL;
-    RcCore *e = core_new(C, (int)sb, (int)pf, 16, MAP_CAPBITS_DEFAULT,
+    if (!(carry >= 0.0 && carry <= C)) return NULL;   /* finite + in range */
+    RcCore *e = core_new(C, (int)sb, (int)pf, 16, (int)mcb,
                          (int)fz, (int)pmode);
     if (!e) return NULL;
     e->carry = carry;
@@ -894,7 +936,12 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     if (rd_u8(&r, &po) || rd_u64(&r, &e->open_start) ||
         rd_u64(&r, &e->open_len) || rd_f64(&r, &e->cs) || rd_f64(&r, &e->lim))
         goto fail;
-    e->patch_open = po;
+    if (po > 1) goto fail;
+    e->patch_open = (int)po;
+    /* patcher scalars must be finite and sane (P1-6): cs is a prefix sum of
+     * per-byte surprisals, lim = cs_at_open + C, carry sits in [0, C] */
+    if (!isfinite(e->cs) || e->cs < 0.0) goto fail;
+    if (!isfinite(e->lim) || e->lim < 0.0) goto fail;
     if (e->store_book && e->patch_open && e->open_len) {
         if (e->open_len > (1ull << 32)) goto fail;
         uint8_t *ob = (uint8_t *)malloc((size_t)e->open_len);
@@ -908,13 +955,17 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     if (rd_get(&r, e->h, sizeof e->h)) goto fail;
     uint64_t nctx = 0;
     if (rd_u64(&r, &nctx)) goto fail;
+    if (nctx > 65536) goto fail;                 /* at most one row per ctx */
     for (uint64_t k = 0; k < nctx; k++) {
-        uint16_t c16; uint8_t m;
-        if (rd_get(&r, &c16, 2) || rd_u8(&r, &m)) goto fail;
+        uint16_t c16; uint16_t m16 = 0;
+        if (rd_get(&r, &c16, 2)) goto fail;
+        if (ver >= 6) { if (rd_u16(&r, &m16)) goto fail; }
+        else { uint8_t m8; if (rd_u8(&r, &m8)) goto fail; m16 = m8; }
+        if (m16 > 256) goto fail;                /* stack buffer bound */
         uint8_t nz[256];
-        if (rd_get(&r, nz, m)) goto fail;
+        if (rd_get(&r, nz, m16)) goto fail;
         uint32_t *row = e->cnt2 + ((uint64_t)c16 << 8);
-        for (int q = 0; q < m; q++) {
+        for (int q = 0; q < (int)m16; q++) {
             uint32_t v;
             if (rd_u32(&r, &v)) goto fail;
             row[nz[q]] = v;
@@ -932,16 +983,36 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     uint64_t capb = 0, cnt = 0;
     if (rd_u64(&r, &capb) || rd_u64(&r, &cnt)) goto fail;
     if (capb > 26) goto fail;
-    free(e->tmap.e);
+    /* P1-2: bound the rebuild before probing. cnt <= 75% of capacity
+     * guarantees an empty slot exists, so the insert loop below always
+     * terminates — previously a crafted 1 KB snapshot could spin forever
+     * with the GIL held. */
+    if (cnt > (((1ull << capb) / 4) * 3)) goto fail;
+    free(e->tmap.e); free(e->tmap.dirty);          /* P1-6: no bitmap leak */
+    e->tmap.e = NULL; e->tmap.dirty = NULL;
     if (map_alloc(&e->tmap, capb, sizeof(Ent)) < 0) goto fail;
     for (uint64_t k = 0; k < cnt; k++) {
         Ent en; memset(&en, 0, sizeof en);
         if (rd_get(&r, &en.key, 8) || rd_get(&r, &en.tot, 4) ||
             rd_get(&r, &en.distinct, 1) ||
             rd_get(&r, en.b, WIN) || rd_get(&r, en.c, WIN * 2)) goto fail;
+        /* P1-1: distinct must be a real window occupancy or the PROMOTED
+         * marker; 17..254 used to reach win_scan / the cold-byte branch
+         * and write past the 64-byte slot. tot must cover every inline
+         * count (each carries >= 1 visit). */
+        if (en.tot == 0) goto fail;                /* occupancy marker */
+        if (en.distinct != PROMOTED) {
+            if (en.distinct == 0 || en.distinct > WIN) goto fail;
+            if (en.tot < en.distinct) goto fail;
+            for (int q = 0; q < en.distinct; q++)
+                if (en.c[q] == 0 || en.c[q] > en.tot) goto fail;
+        }
         uint64_t j = (en.key * GOLDEN) >> (64 - e->tmap.capbits);
-        while (((Ent *)((uint8_t *)e->tmap.e + j * e->tmap.esize))->tot)
+        while (((Ent *)((uint8_t *)e->tmap.e + j * e->tmap.esize))->tot) {
+            if (((Ent *)((uint8_t *)e->tmap.e + j * e->tmap.esize))->key
+                == en.key) goto fail;              /* duplicate key in file */
             j = (j + 1) & e->tmap.mask;
+        }
         *(Ent *)((uint8_t *)e->tmap.e + j * e->tmap.esize) = en;
         {   const uint64_t pgidx = j >> e->tmap.page_shift;
             e->tmap.dirty[pgidx >> 6] |= 1ull << (pgidx & 63); }
@@ -949,14 +1020,20 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     }
     if (rd_u64(&r, &capb) || rd_u64(&r, &cnt)) goto fail;
     if (capb > 26) goto fail;
-    free(e->cmap.e);
+    if (cnt > (((1ull << capb) / 4) * 3)) goto fail;
+    free(e->cmap.e); free(e->cmap.dirty);
+    e->cmap.e = NULL; e->cmap.dirty = NULL;
     if (map_alloc(&e->cmap, capb, sizeof(CEnt)) < 0) goto fail;
     for (uint64_t k = 0; k < cnt; k++) {
         CEnt en; memset(&en, 0, sizeof en);
         if (rd_get(&r, &en.key, 8) || rd_get(&r, &en.tot, 4)) goto fail;
+        if (en.tot == 0) goto fail;
         uint64_t j = (en.key * GOLDEN) >> (64 - e->cmap.capbits);
-        while (((CEnt *)((uint8_t *)e->cmap.e + j * e->cmap.esize))->tot)
+        while (((CEnt *)((uint8_t *)e->cmap.e + j * e->cmap.esize))->tot) {
+            if (((CEnt *)((uint8_t *)e->cmap.e + j * e->cmap.esize))->key
+                == en.key) goto fail;
             j = (j + 1) & e->cmap.mask;
+        }
         *(CEnt *)((uint8_t *)e->cmap.e + j * e->cmap.esize) = en;
         {   const uint64_t pgidx = j >> e->cmap.page_shift;
             e->cmap.dirty[pgidx >> 6] |= 1ull << (pgidx & 63); }
@@ -965,9 +1042,20 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     if (e->store_book) {
         uint64_t bn = 0, alen = 0;
         if (rd_u64(&r, &bn) || rd_u64(&r, &alen)) goto fail;
-        /* size the book hash for bn entries before rebuilding it */
+        /* P1-3/P1-5: entry ids are u32 (hv stores id+1), arena offsets are
+         * u32 (book_intern truncates at 4 GiB — the documented limit); a
+         * nonempty book needs a nonempty arena, and an empty book has no
+         * arena bytes. */
+        if (bn > 0xFFFFFFFEull) goto fail;
+        if (alen > 0xFFFFFFFFull) goto fail;
+        if ((bn == 0) != (alen == 0)) goto fail;
+        /* size the book hash for bn entries before rebuilding it; cap
+         * raised 26 -> 31 so legitimate large books load (book_grow_hash
+         * itself grows unbounded), with the load factor bounded below 0.5
+         * so the rebuild probe below always terminates */
         uint64_t want = e->book.capbits;
-        while ((bn + 1) * 2 >= (1ull << want) && want < 26) want++;
+        while ((bn + 1) * 2 >= (1ull << want) && want < 31) want++;
+        if ((bn + 1) * 2 >= (1ull << want)) goto fail;
         if (want != e->book.capbits) {
             free(e->book.hk); free(e->book.hv);
             e->book.capbits = want; e->book.mask = (1ull << want) - 1;
@@ -996,6 +1084,10 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         for (uint64_t id = 0; id < bn; id++) {
             uint32_t off, ln;
             if (rd_u32(&r, &off) || rd_u32(&r, &ln)) goto fail;
+            /* P1-3: every (off, ln) must land inside the arena — unchecked
+             * values used to reach fnv1a64 and decode_bytes' memcpy */
+            if ((uint64_t)off > alen || (uint64_t)ln > alen - (uint64_t)off)
+                goto fail;
             e->book.off[id] = off; e->book.ln[id] = ln;
         }
         e->book.n = bn;
@@ -1181,6 +1273,11 @@ static PyObject *Engine_surprise(EngineObj *self, PyObject *arg) {
     PyObject *out = NULL;
     if (rc == 0) {
         out = PyBytes_FromStringAndSize((const char *)sur, (Py_ssize_t)(n * 4));
+    } else if (rc == -3) {
+        /* recoverable: map exhaustion leaves valid state (matches
+         * encode_bytes) — a MemoryError + poison here was wrong */
+        PyErr_SetString(RatecError, "context map exhausted; raise "
+                        "map_capbits or encode in chunks");
     } else { self->core->poisoned = 1; PyErr_NoMemory(); }
     free(sur);
     return out;
@@ -1475,8 +1572,8 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     for (Py_ssize_t k = 0; k < nd; k++) {
         if (jobs[k].err) {
             Py_DECREF(out);
-            for (Py_ssize_t q = k; q < nd; q++) PyBuffer_Release(&views[q]);
-            for (Py_ssize_t q = k; q < nd; q++) free(jobs[q].out);
+            for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
+            for (Py_ssize_t q = 0; q < nd; q++) free(jobs[q].out);
             free(views); free(jobs); Py_DECREF(fast);
             PyErr_SetString(RatecError, "batch job failed (OOM?)");
             return NULL;
@@ -1485,8 +1582,8 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
             (const char *)jobs[k].out, (Py_ssize_t)(jobs[k].nout * 4));
         if (!b) {
             Py_DECREF(out);
-            for (Py_ssize_t q = k; q < nd; q++) PyBuffer_Release(&views[q]);
-            for (Py_ssize_t q = k; q < nd; q++) free(jobs[q].out);
+            for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
+            for (Py_ssize_t q = 0; q < nd; q++) free(jobs[q].out);
             free(views); free(jobs); Py_DECREF(fast);
             return NULL;
         }
@@ -1534,7 +1631,7 @@ static PyObject *rc_load_state(PyObject *self, PyObject *arg) {
     RcCore *core = load_core((const uint8_t *)view.buf, (size_t)view.len);
     PyBuffer_Release(&view);
     if (!core) {
-        PyErr_SetString(PyExc_ValueError, "invalid or truncated ratec state");
+        PyErr_SetString(RatecError, "invalid or truncated ratec state");
         return NULL;
     }
     EngineObj *selfobj = (EngineObj *)Engine_Type.tp_alloc(&Engine_Type, 0);

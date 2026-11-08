@@ -10,5 +10,14 @@
  "ascent_raw_recipe": "bakeoff_data/ascent.raw (512-wide u8 raster)",
  "lm_corpus_len": 320000,
  "lm_corpus_sha256": "d9b79620cb05d8c151ab9a8f0be90d753275f3f1569694db8f781f9724208d21",
- "lm_corpus_recipe": "english[:200000] + code[:60000] + chinese[:60000]"
+ "lm_corpus_recipe": "english[:200000] + code[:60000] + chinese[:60000]",
+ "v6_c20_sha256": "35dc2a4f3b8da5df9529982d38258be5ed325ec39108824d80ae9f856fc4ab39",
+ "v6_c20_golden_sha256": "1b96b2174462458f06541fc4835300627b4f795b443d0693b9b33974a44a5a4c",
+ "v6_c20_len": 1383139,
+ "v6_c33_sha256": "c101bc0854001c2f7c243991d6bf43899045a21745945c0c5cc0cf708ab5aa42",
+ "v6_c33_golden_sha256": "e69247c83aa388e1a167d80d48b41cca915c7800572cd9c5b2f3b4ebe9453c19",
+ "v6_c33_len": 1293550,
+ "v6_c20carry_sha256": "1a2dd3f9c12914899dcafe107177f7e7720fd751b6d2410211aac143809162fd",
+ "v6_c20carry_golden_sha256": "991494c81572dd4c5627a6cacca6f3e66405318537c810107e2f4a1ff832f62d",
+ "v6_c20carry_len": 1401082
 }

@@ -268,7 +268,12 @@ def _maybe_compress(raw: bytes) -> bytes:
 
 def _maybe_decompress(raw: bytes) -> bytes:
     if raw[:4] == _MAGIC:
-        return zlib.decompress(raw[4:])
+        try:
+            return zlib.decompress(raw[4:])
+        except zlib.error as e:
+            # a corrupt RCZ1 container must surface as RatecError, not an
+            # unrelated zlib.error leaking out of load_state (v0.6.0)
+            raise RatecError(f"corrupt ratec state container: {e}") from None
     return raw
 
 
