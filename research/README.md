@@ -6,6 +6,31 @@ large artifacts (tokenized `.npy` streams, `.pt` checkpoints) stay outside
 the repo — point `RATEC_RUNS` / `RATEC_TWIN_DATA` at your own copies to
 reproduce.
 
+## Record convention (v0.6.0)
+
+A published number is only as good as its record. Every record produced
+by running code carries a provenance envelope (`research/record_util.py`):
+`ratec_version`, `deps`, `git_rev`, `host`, `created_utc`, and `inputs`
+(every consumed file bound by sha256). Legacy records without the full
+envelope are kept verbatim and marked as such — never silently upgraded.
+Two producers already emit the envelope: `bench_scale.py` (scale records)
+and `build_streams.py` (twin-stream manifests); `make records` adds it
+when copying fresh bench outputs from unversioned `results/` into here.
+
+The README's published tables are **generated**, not hand-written:
+`make tables` rewrites the `<!-- table:... -->` sentinel blocks in
+README.md from the committed records, and `tests/test_tables.py` fails
+if a hand-edited number drifts from its record (the guard that would
+have caught the v0.5.0 scale-table supersession before it shipped).
+
+## Twin-stream producer — `build_streams.py`
+
+Produces the twin study's `ratec` and `bytes` training/val streams
+(`runs/{kind}_{dom}_{split}_{ids,lens}.npy`) from the sha256-bound
+corpora, writing a `streams_manifest.json` with every file hashed. The
+`bpe` arm is NOT produced in-repo (its 9472-merge table was trained
+outside the repo); its streams are bound by sha256 in the twin records.
+
 ## Twin study — `twin_study.py`, `twin_reeval.py`, `twin_*.json`
 
 The standing rent since the v0.3 LM track: the same transformer trained on

@@ -1,0 +1,213 @@
+{
+ "protocol": {
+  "c_bits": 20,
+  "pf": 3,
+  "reps": {
+   "tiktoken": 25,
+   "ratec": 31
+  },
+  "input": "bake-off scored spans (32768B warm edge trimmed)",
+  "ratec_arm": "ratec 0.1.0 engine, pool steady-state (in-place reset, reset cost included), store_book=False, pf=2, prebits=21",
+  "exactness": {
+   "english": true,
+   "code": true,
+   "chinese": true,
+   "base64": true
+  }
+ },
+ "per_domain": {
+  "english": {
+   "bytes": 267232,
+   "bpe50k": {
+    "med_s": 0.019908287,
+    "units": 73601,
+    "MB_per_s": 13.423153885615573,
+    "units_per_byte": 0.27541985989701834
+   },
+   "cl100k": {
+    "med_s": 0.019152315,
+    "units": 61854,
+    "MB_per_s": 13.952986884353146,
+    "units_per_byte": 0.23146180098191832
+   },
+   "o200k": {
+    "med_s": 0.013861515,
+    "units": 61275,
+    "MB_per_s": 19.278700776935278,
+    "units_per_byte": 0.2292951442940965
+   },
+   "ratec": {
+    "med_s": 0.048695439,
+    "units": 54572,
+    "exact": true,
+    "pf": 2,
+    "cold_med_s": 0.065298897,
+    "MB_per_s": 5.487824023929633,
+    "units_per_byte": 0.20421207041072925
+   }
+  },
+  "code": {
+   "bytes": 164574,
+   "bpe50k": {
+    "med_s": 0.013828222,
+    "units": 67814,
+    "MB_per_s": 11.90131312615606,
+    "units_per_byte": 0.4120577977080219
+   },
+   "cl100k": {
+    "med_s": 0.013817331,
+    "units": 37176,
+    "MB_per_s": 11.910693895948501,
+    "units_per_byte": 0.225892303766087
+   },
+   "o200k": {
+    "med_s": 0.009589454,
+    "units": 37322,
+    "MB_per_s": 17.161978148078084,
+    "units_per_byte": 0.2267794426823192
+   },
+   "ratec": {
+    "med_s": 0.035454325,
+    "units": 33211,
+    "exact": true,
+    "pf": 2,
+    "cold_med_s": 0.0363383735,
+    "MB_per_s": 4.641859632075917,
+    "units_per_byte": 0.20179979826704098
+   }
+  },
+  "chinese": {
+   "bytes": 267231,
+   "bpe50k": {
+    "med_s": 0.019125627,
+    "units": 192876,
+    "MB_per_s": 13.97240466939986,
+    "units_per_byte": 0.7217575805202241
+   },
+   "cl100k": {
+    "med_s": 0.02095103,
+    "units": 123114,
+    "MB_per_s": 12.755029227679977,
+    "units_per_byte": 0.4607025382534212
+   },
+   "o200k": {
+    "med_s": 0.021917446,
+    "units": 88178,
+    "MB_per_s": 12.192615873218074,
+    "units_per_byte": 0.32996920267483937
+   },
+   "ratec": {
+    "med_s": 0.053822422,
+    "units": 78103,
+    "exact": true,
+    "pf": 2,
+    "cold_med_s": 0.071159433,
+    "MB_per_s": 4.96504969620282,
+    "units_per_byte": 0.2922677383986139
+   }
+  },
+  "base64": {
+   "bytes": 260568,
+   "bpe50k": {
+    "med_s": 0.028659542,
+    "units": 200542,
+    "MB_per_s": 9.09184103500328,
+    "units_per_byte": 0.7696340302723281
+   },
+   "cl100k": {
+    "med_s": 0.032051624,
+    "units": 186976,
+    "MB_per_s": 8.129634866551536,
+    "units_per_byte": 0.7175708452304197
+   },
+   "o200k": {
+    "med_s": 0.029132947,
+    "units": 178002,
+    "MB_per_s": 8.9441002999113,
+    "units_per_byte": 0.6831306990881459
+   },
+   "ratec": {
+    "med_s": 0.075419732,
+    "units": 130283,
+    "exact": true,
+    "pf": 2,
+    "cold_med_s": 0.0816414255,
+    "MB_per_s": 3.4549048782087954,
+    "units_per_byte": 0.49999616223020477
+   }
+  }
+ },
+ "overall": {
+  "bpe50k": {
+   "total_bytes": 959605,
+   "total_s": 0.081521678,
+   "MB_per_s": 11.7711634934698
+  },
+  "cl100k": {
+   "total_bytes": 959605,
+   "total_s": 0.0859723,
+   "MB_per_s": 11.161792810009734
+  },
+  "o200k": {
+   "total_bytes": 959605,
+   "total_s": 0.074501362,
+   "MB_per_s": 12.880368549503833
+  },
+  "ratec": {
+   "total_bytes": 959605,
+   "total_s": 0.213391918,
+   "MB_per_s": 4.496913514784566
+  }
+ },
+ "speedup_vs_r50k": {
+  "english": 0.4088326834880778,
+  "code": 0.39002919954053555,
+  "chinese": 0.3553468292452539,
+  "base64": 0.3800005812802411,
+  "ALL": 0.3820279547794307
+ },
+ "batch_2t": {
+  "ratec_MBps": 7.279432633639236,
+  "tiktoken_MBps": 13.624488994986038,
+  "ratio": 0.5342903235723664,
+  "exact": true
+ },
+ "pf_sweep_english": {
+  "0": {
+   "med_s": 0.070112646,
+   "MBps": 3.8114664792425605
+  },
+  "1": {
+   "med_s": 0.033809113,
+   "MBps": 7.904141111303334
+  },
+  "2": {
+   "med_s": 0.033376715,
+   "MBps": 8.0065398886619
+  },
+  "3": {
+   "med_s": 0.034594792,
+   "MBps": 7.724630921324805
+  },
+  "4": {
+   "med_s": 0.038124031,
+   "MBps": 7.009542091705884
+  }
+ },
+ "record": {
+  "ratec_version": "0.6.0",
+  "deps": {
+   "numpy": "2.1.3"
+  },
+  "git_rev": "",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-08T12:31:09+00:00",
+  "inputs": {},
+  "provenance": "copied verbatim from the v0.3-era workspace report (results/ was unversioned then); envelope added at import into research/ in v0.6.0 \u2014 protocol fields inside reflect what the P0-4-fixed producer now writes"
+ }
+}

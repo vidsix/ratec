@@ -209,6 +209,7 @@ if best:
           f"{best['units_per_byte']:.4f} units/byte ({gain:+.1f}% vs cold)")
 
 big = os.environ.get("RATEC_SCALE_DATA")
+from research.record_util import record_envelope          # noqa: E402
 record = {"protocol": {
            "c": 20,
            "corpus_kind": CORPUS_KIND,
@@ -228,6 +229,16 @@ record = {"protocol": {
 if big:
     record["protocol"]["corpus_path"] = big
     record["protocol"]["corpus_file_sha256"] = _CORPUS_FILE_SHA256
+# provenance envelope (PLAN_v0.6 P2-1): version, deps, git rev, host, inputs
+record["protocol"].update(record_envelope(
+    inputs={"corpus": big} if big else
+           {"ratec_fixtures": os.path.relpath(FIXTURES, ROOT)},
+    deps=("numpy", "tiktoken")))
+# corpus_path must not embed an absolute user path in a committed record
+if "corpus_path" in record["protocol"]:
+    record["protocol"]["corpus_path"] = "RATEC_SCALE_DATA (user-provided file)"
+    if "corpus" in record["protocol"].get("inputs", {}):
+        record["protocol"]["inputs"]["corpus"]["path"] = os.path.basename(big)
 out = record
 with open(os.path.join(OUT, "scale.json"), "w") as f:
     json.dump(out, f, indent=1)

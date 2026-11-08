@@ -23,7 +23,9 @@ Tests run anywhere: the scored spans, reference surprisal/starts, the
 v4-continuation slices, the u8_image raster and the snapshot-training corpus
 ship under `tests/data/` (sha256-bound, ~11 MB incl. reference arrays). Env
 overrides: `RATEC_FIXTURES`, `RATEC_BAKEOFF_DATA` + `RATEC_BAKEOFF_CACHE`
-(full per-C golden gate), `RATEC_OUT`.
+(full per-C golden gate), `RATEC_OUT`; benches: `RATEC_SCALE_DATA` (big-file
+scale mode), `RATEC_SCALE_PROBE` (probe bytes, default 128 K); twin study:
+`RATEC_RUNS` / `RATEC_TWIN_DATA` (repo-relative by default).
 
 ```python
 import ratec
@@ -200,14 +202,16 @@ snapshot** — the probe never touches the warming engine. On a 15.8 MB
 en/hr/zh/code pretraining mix (C=20, full record in
 `research/scale_mix15.8MB.json`):
 
+<!-- table:scale generated from research/scale_mix15.8MB.json — do not edit; run make tables -->
 | adaptation seen | units/byte (probe) | vs cold |
 |---|---|---|
 | 0 (cold engine) | 0.157 | — |
-| 64 KB | 0.151 | −4% |
-| 256 KB | 0.148 | −6% |
+| 62 KB | 0.151 | −4% |
+| 250 KB | 0.148 | −6% |
 | 1 MB | 0.146 | −7% |
-| 8 MB | 0.147 | −7% (saturated) |
+| 8 MB | 0.147 | −7% |
 | tiktoken r50k_base (same probe) | 0.431 | flat by construction |
+<!-- /table:scale -->
 
 Honest reading: the adaptation effect is real but modest — about **−7%
 units/byte**, front-loaded (most of it within the first 1 MB) and flat
@@ -255,11 +259,14 @@ sandbox drifts tens of percent; memory-bound adaptive workloads suffer
 more under contention than tiktoken's compact lookup loops). What
 RateC buys instead, per byte:
 
+<!-- table:fertility generated from research/bench_tiktoken.json — do not edit; run make tables -->
 | domain | tiktoken r50k units/byte | ratec units/byte | fewer LM positions |
 |---|---|---|---|
 | english | 0.275 | 0.204 | −26% |
+| code | 0.412 | 0.202 | −51% |
 | chinese | 0.722 | 0.292 | −60% |
 | base64 | 0.770 | 0.500 | −35% |
+<!-- /table:fertility -->
 
 plus: no vocab file, any C at runtime, byte-native multimodality, and
 real multi-core throughput via `batch_spans` (independent docs) and

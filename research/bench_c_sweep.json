@@ -1,0 +1,337 @@
+{
+ "protocol": {
+  "library": "ratec 0.2.0",
+  "c_values": [
+   12,
+   16,
+   20,
+   24,
+   28,
+   32
+  ],
+  "input": "bake-off scored spans (meta.json warm/scored trimming)",
+  "reps": {
+   "single_thread": 21,
+   "batch_2t": 9
+  },
+  "ratec_arm": "pool steady-state: tok.reset() inside timed window then encode_to_spans; round-robin across all (domain,C) arms; medians",
+  "batch_arm": "ratec.batch_spans(docs of all 4 domains, c=C, threads=2), round-robin over C; total MB/s over all 4 docs",
+  "gates": "G1 spans==golden r{C}starts (int64 exact), G2 tiling [0,len), G3 patch_from_sur(surprise(span),C)==golden, G4 batch starts==serial golden; all must pass before timing counts",
+  "pool_engine_rep0_exact": true
+ },
+ "per_domain": {
+  "english": {
+   "bytes": 267232,
+   "per_c": {
+    "12": {
+     "gate": true,
+     "patches": 100368,
+     "tokens_per_byte": 0.3755837624236618,
+     "med_s": 0.049300063,
+     "MBps": 5.420520456535725,
+     "pool_exact": true
+    },
+    "16": {
+     "gate": true,
+     "patches": 70255,
+     "tokens_per_byte": 0.2628989043228356,
+     "med_s": 0.046041505,
+     "MBps": 5.804154316849546,
+     "pool_exact": true
+    },
+    "20": {
+     "gate": true,
+     "patches": 54572,
+     "tokens_per_byte": 0.20421207041072925,
+     "med_s": 0.041990575,
+     "MBps": 6.364094799844965,
+     "pool_exact": true
+    },
+    "24": {
+     "gate": true,
+     "patches": 44441,
+     "tokens_per_byte": 0.16630119147407496,
+     "med_s": 0.041697646,
+     "MBps": 6.4088030293124945,
+     "pool_exact": true
+    },
+    "28": {
+     "gate": true,
+     "patches": 37552,
+     "tokens_per_byte": 0.1405220931624955,
+     "med_s": 0.040286017,
+     "MBps": 6.633368595361512,
+     "pool_exact": true
+    },
+    "32": {
+     "gate": true,
+     "patches": 32479,
+     "tokens_per_byte": 0.12153858819303077,
+     "med_s": 0.038916087,
+     "MBps": 6.8668774432537365,
+     "pool_exact": true
+    }
+   }
+  },
+  "code": {
+   "bytes": 164574,
+   "per_c": {
+    "12": {
+     "gate": true,
+     "patches": 62158,
+     "tokens_per_byte": 0.3776902791449439,
+     "med_s": 0.035530877,
+     "MBps": 4.631858650716671,
+     "pool_exact": true
+    },
+    "16": {
+     "gate": true,
+     "patches": 42479,
+     "tokens_per_byte": 0.258114890565946,
+     "med_s": 0.033891438,
+     "MBps": 4.855916706750536,
+     "pool_exact": true
+    },
+    "20": {
+     "gate": true,
+     "patches": 33211,
+     "tokens_per_byte": 0.20179979826704098,
+     "med_s": 0.031291467,
+     "MBps": 5.259389085209715,
+     "pool_exact": true
+    },
+    "24": {
+     "gate": true,
+     "patches": 26884,
+     "tokens_per_byte": 0.16335508646566285,
+     "med_s": 0.031352989,
+     "MBps": 5.249068916523398,
+     "pool_exact": true
+    },
+    "28": {
+     "gate": true,
+     "patches": 22719,
+     "tokens_per_byte": 0.13804732217725765,
+     "med_s": 0.030861998,
+     "MBps": 5.332577625077935,
+     "pool_exact": true
+    },
+    "32": {
+     "gate": true,
+     "patches": 19594,
+     "tokens_per_byte": 0.11905890359352024,
+     "med_s": 0.029935473,
+     "MBps": 5.49762484127109,
+     "pool_exact": true
+    }
+   }
+  },
+  "chinese": {
+   "bytes": 267231,
+   "per_c": {
+    "12": {
+     "gate": true,
+     "patches": 151912,
+     "tokens_per_byte": 0.5684669817498719,
+     "med_s": 0.057206754,
+     "MBps": 4.6713190543899765,
+     "pool_exact": true
+    },
+    "16": {
+     "gate": true,
+     "patches": 98244,
+     "tokens_per_byte": 0.36763698822367163,
+     "med_s": 0.054211961,
+     "MBps": 4.9293734273881,
+     "pool_exact": true
+    },
+    "20": {
+     "gate": true,
+     "patches": 78103,
+     "tokens_per_byte": 0.2922677383986139,
+     "med_s": 0.049083933,
+     "MBps": 5.444368119400701,
+     "pool_exact": true
+    },
+    "24": {
+     "gate": true,
+     "patches": 62328,
+     "tokens_per_byte": 0.23323641344005747,
+     "med_s": 0.047800995,
+     "MBps": 5.590490323475484,
+     "pool_exact": true
+    },
+    "28": {
+     "gate": true,
+     "patches": 52767,
+     "tokens_per_byte": 0.19745837870606328,
+     "med_s": 0.046142875,
+     "MBps": 5.7913816596820205,
+     "pool_exact": true
+    },
+    "32": {
+     "gate": true,
+     "patches": 45372,
+     "tokens_per_byte": 0.1697856910313549,
+     "med_s": 0.044577292,
+     "MBps": 5.994778686870436,
+     "pool_exact": true
+    }
+   }
+  },
+  "base64": {
+   "bytes": 260568,
+   "per_c": {
+    "12": {
+     "gate": true,
+     "patches": 260568,
+     "tokens_per_byte": 1.0,
+     "med_s": 0.085441872,
+     "MBps": 3.04965228289942,
+     "pool_exact": true
+    },
+    "16": {
+     "gate": true,
+     "patches": 130299,
+     "tokens_per_byte": 0.5000575665469282,
+     "med_s": 0.075670347,
+     "MBps": 3.44346247018003,
+     "pool_exact": true
+    },
+    "20": {
+     "gate": true,
+     "patches": 130283,
+     "tokens_per_byte": 0.49999616223020477,
+     "med_s": 0.067476485,
+     "MBps": 3.861611937847681,
+     "pool_exact": true
+    },
+    "24": {
+     "gate": true,
+     "patches": 86861,
+     "tokens_per_byte": 0.33335252218230943,
+     "med_s": 0.06533141,
+     "MBps": 3.988403127990043,
+     "pool_exact": true
+    },
+    "28": {
+     "gate": true,
+     "patches": 86852,
+     "tokens_per_byte": 0.3333179822541525,
+     "med_s": 0.063298763,
+     "MBps": 4.116478547929918,
+     "pool_exact": true
+    },
+    "32": {
+     "gate": true,
+     "patches": 65144,
+     "tokens_per_byte": 0.2500076755395904,
+     "med_s": 0.059309886,
+     "MBps": 4.393331661436679,
+     "pool_exact": true
+    }
+   }
+  }
+ },
+ "batch": {
+  "12": {
+   "med_s": 0.119817282,
+   "MBps": 8.008903089622747,
+   "gate": true
+  },
+  "16": {
+   "med_s": 0.116480999,
+   "MBps": 8.238296445242542,
+   "gate": true
+  },
+  "20": {
+   "med_s": 0.113145808,
+   "MBps": 8.481136128348652,
+   "gate": true
+  },
+  "24": {
+   "med_s": 0.112589199,
+   "MBps": 8.523064454877238,
+   "gate": true
+  },
+  "28": {
+   "med_s": 0.111306659,
+   "MBps": 8.621272155873442,
+   "gate": true
+  },
+  "32": {
+   "med_s": 0.110606347,
+   "MBps": 8.675858357387032,
+   "gate": true
+  }
+ },
+ "trend": {
+  "english": {
+   "tokens_per_byte_C12": 0.3755837624236618,
+   "tokens_per_byte_C32": 0.12153858819303077,
+   "tok_per_byte_monotone_decreasing": true,
+   "MBps_C12": 5.420520456535725,
+   "MBps_C32": 6.8668774432537365,
+   "MBps_min": 5.420520456535725,
+   "MBps_max": 6.8668774432537365,
+   "MBps_pct_change_C12_to_C32": 26.682991021168185,
+   "MBps_direction": "up"
+  },
+  "code": {
+   "tokens_per_byte_C12": 0.3776902791449439,
+   "tokens_per_byte_C32": 0.11905890359352024,
+   "tok_per_byte_monotone_decreasing": true,
+   "MBps_C12": 4.631858650716671,
+   "MBps_C32": 5.49762484127109,
+   "MBps_min": 4.631858650716671,
+   "MBps_max": 5.49762484127109,
+   "MBps_pct_change_C12_to_C32": 18.69155032225481,
+   "MBps_direction": "up"
+  },
+  "chinese": {
+   "tokens_per_byte_C12": 0.5684669817498719,
+   "tokens_per_byte_C32": 0.1697856910313549,
+   "tok_per_byte_monotone_decreasing": true,
+   "MBps_C12": 4.6713190543899765,
+   "MBps_C32": 5.994778686870436,
+   "MBps_min": 4.6713190543899765,
+   "MBps_max": 5.994778686870436,
+   "MBps_pct_change_C12_to_C32": 28.33160435138141,
+   "MBps_direction": "up"
+  },
+  "base64": {
+   "tokens_per_byte_C12": 1.0,
+   "tokens_per_byte_C32": 0.2500076755395904,
+   "tok_per_byte_monotone_decreasing": true,
+   "MBps_C12": 3.04965228289942,
+   "MBps_C32": 4.393331661436679,
+   "MBps_min": 3.04965228289942,
+   "MBps_max": 4.393331661436679,
+   "MBps_pct_change_C12_to_C32": 44.06008468807375,
+   "MBps_direction": "up"
+  },
+  "batch2T": {
+   "MBps_C12": 8.008903089622747,
+   "MBps_C32": 8.675858357387032,
+   "MBps_min": 8.008903089622747,
+   "MBps_max": 8.675858357387032,
+   "MBps_pct_change_C12_to_C32": 8.327673094564833
+  }
+ },
+ "record": {
+  "ratec_version": "0.6.0",
+  "deps": {
+   "numpy": "2.1.3"
+  },
+  "git_rev": "",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-08T12:31:09+00:00",
+  "inputs": {},
+  "provenance": "copied verbatim from the v0.3-era workspace report (results/ was unversioned then); envelope added at import into research/ in v0.6.0 \u2014 protocol fields inside reflect what the P0-4-fixed producer now writes"
+ }
+}

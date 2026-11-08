@@ -3,12 +3,13 @@ PY ?= python3
 build:
         $(PY) setup.py build_ext --inplace
 
-# full correctness pass: engine build + suite + bit-exactness gate + snapshot fuzz
+# full correctness pass: engine build + suite + bit-exactness gate + snapshot fuzz + tables drift
 test: build
         $(PY) tests/test_ratec.py
         $(PY) tests/test_v04.py
         $(PY) tests/test_profiles.py
         $(PY) tests/test_snapfuzz.py
+        $(PY) tests/test_tables.py
         $(PY) tests/gate_bitexact.py
 
 # pytest over the standalone scripts (conftest.py builds the engine first)
@@ -19,6 +20,15 @@ pytest: build
 bench: build
         $(PY) bench/bench_c_sweep.py
         $(PY) bench/bench_vs_tiktoken.py
+
+# regenerate the record-backed README tables (fails under --check if hand-edited)
+tables: build
+        $(PY) research/make_tables.py
+
+# copy bench outputs (results/*.json, unversioned) into research/ with a
+# provenance envelope — run at release time before tagging
+records: build
+        $(PY) research/capture_records.py
 
 # efficiency-vs-scale bench (portable fixtures by default; RATEC_SCALE_DATA
 # =<big file> for the full curve, e.g. a 16 MB pretraining mix)

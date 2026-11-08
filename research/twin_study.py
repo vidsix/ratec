@@ -44,8 +44,12 @@ import torch.nn.functional as F
 # Tokenized streams (.npy) and checkpoints (.pt) are produced outside the
 # repo and are large; override both to rerun. The committed research/*.json
 # are the result records for the seed-42 run documented in this docstring.
-RUNS = os.environ.get("RATEC_RUNS", "../runs")
-DATA = os.environ.get("RATEC_TWIN_DATA", "../data")
+# Defaults are REPO-relative (not CWD-relative — a run from anywhere finds
+# the same layout; PLAN_v0.6 P2-6).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+RUNS = os.environ.get("RATEC_RUNS", os.path.join(_ROOT, "runs"))
+DATA = os.environ.get("RATEC_TWIN_DATA", os.path.join(_ROOT, "data"))
 DOMAINS = ["en", "hr", "zh", "code"]
 V = 256 + 9 * (2 ** 10)     # 9472; length rows cap patches at 9 bytes
                             # (len_idx <= 9) — a deliberate divergence from
