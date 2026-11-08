@@ -6,13 +6,14 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.5.0, experimental. The C core and byte-level semantics are
-> stable and bit-exact gate-verified; the LM-side surface (`ratec.smollm2`)
-> and the patcher modes/servos are new and may still move. Code-first
-> repo: run `tests/` and `bench/` yourself — no benchmark claims against
-> SOTA in this README. Independently replicated: an external gate
-> (tiling/parity/carry/fractional-C monotonicity) passes on foreign boxes,
-> and the base64 fertility number replicates exactly.
+> **Status:** v0.6.0, experimental. The C core and byte-level semantics are
+> stable and bit-exact gate-verified; the snapshot load path is hardened
+> and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
+> committed records (`make tables`). The LM-side surface (`ratec.smollm2`)
+> may still move. Code-first repo: run `tests/` and `bench/` yourself — no
+> benchmark claims against SOTA in this README. Independently replicated:
+> an external gate (tiling/parity/carry/fractional-C monotonicity) passes
+> on foreign boxes, and the base64 fertility number replicates exactly.
 
 ```
 pip install .            # C extension, gcc >= 9, x86-64 (or any 64-bit)
@@ -318,12 +319,21 @@ paths to raw speed.
     byte-exactly on any machine, parallel-fertility is informational
     (tiling/determinism stay hard), `conftest.py` + `make test` for the
     first-run experience.
-12. **~~Efficiency vs scale, tokenizer side~~ measured (v0.5.0)** —
-    adaptation improves held-out fertility −52% with a 256 KB-scale
-    knee and a ~0.076 units/byte floor (5.7× under tiktoken r50k);
-    saturated by ~1 MB. Numbers, honest caveats and reproduce command
-    in the section above; record in `research/scale_mix15.8MB.json`.
+12. **~~Efficiency vs scale, tokenizer side~~ measured, protocol-corrected (v0.6.0)** —
+    the honest adaptation effect is ~−7% units/byte (cold 0.157 → 0.146
+    at 1 MB, saturated; the v0.5.0 −52% claim was a probe self-ingestion
+    artifact), while the architectural fertility gap vs tiktoken r50k
+    holds at ~2.9× warm / ~2.7× cold. Numbers, honest caveats and
+    reproduce command in the section above; record in
+    `research/scale_mix15.8MB.json` (superseded record kept verbatim).
     LM-side scale (BPB vs training scale) remains open.
+13. **~~The information release~~ done (v0.6.0)** — snapshot load
+    hardened + fuzz-gated (format v6, ≥1000 mutants/run), record
+    convention with provenance envelopes, README tables generated from
+    records (`make tables` + drift test), property/API test expansion,
+    baseline-ISA default build, version single-sourced, complete sdist,
+    CI with ASan + sdist + LM-port jobs. Plan:
+    `docs/PLAN_v0.6.md`.
 
 ## Layout
 

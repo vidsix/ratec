@@ -1,7 +1,14 @@
 # Changelog
 
-## v0.6.0 — unreleased (the information release, step 1: honest numbers)
+## v0.6.0 — 2026-11 (the information release)
 
+Everything published is now regenerable, every hard claim is guarded by a
+test, and the snapshot load path — the attack surface — is hardened and
+fuzz-gated. Full review and plan: `docs/PLAN_v0.6.md`. The default encode
+path is bit-identical to v0.5.0 (bit-exactness gate green on all domains;
+scale record re-produced row-identical after the hardening).
+
+### P0 — honest numbers (protocol corrections)
 - **P0-1 · scale-bench protocol correction (re-measured).** The v0.5.0
   scale record was produced by a flawed protocol: the "held-out" 128 KB
   probe was fed into the warming engine at every scale before being
@@ -39,6 +46,90 @@
   required, float64 cast, other dtypes rejected — float64 bytes silently
   reinterpreted as float32 produced garbage starts); `pf` docstring now
   matches the code (auto → `PF_DEFAULT` 2).
+
+### P1 — snapshot hardening + format v6 (`load_state` was the attack surface)
+- **P1-1 (HIGH)** `Ent.distinct` must be PROMOTED or 1..16 — values
+  17..254 reached `win_scan`/the cold-byte branch and could write past
+  the 64-byte slot. `tot >= distinct` and every inline count in
+  `[1, tot]` are enforced; `distinct == 0` (impossible occupancy) and
+  duplicate keys rejected; `tot == 0` rejected (occupancy marker).
+- **P1-2 (HIGH)** the map rebuild's probe loop is now provably
+  terminating: entry count bounded to 75% of capacity for tmap and cmap.
+  A crafted 1 KB snapshot previously spun the interpreter forever with
+  the GIL held. Regression-tested in a 30 s subprocess.
+- **P1-3 (MED)** every book `(off, ln)` validated against `alen`;
+  `bn == 0 ⇔ alen == 0`; ids bounded by the u32 contract.
+- **P1-4 (MED)** snapshot format **v6** (write v6, read v2..v6): the
+  per-row nonzero counter is u16 — the u8 counter silently dropped rows
+  with all 256 counts nonzero (save→load not bit-exact on dense tables).
+  Byte layout otherwise = v5.
+- **P1-5 (MED)** book-hash sizing cap raised 26→31 with load factor < ½
+  enforced, so legitimate large books load and the rebuild terminates;
+  `map_capbits` is now SERIALIZED (a tuned engine used to restore as the
+  default reserve ceiling); `cs`/`lim`/`carry` must be finite and in
+  range; dirty bitmaps no longer leak on map re-alloc.
+- **P1-6 (LOW)** `load_state` raises `RatecError` (was ValueError);
+  big-endian builds fail at compile time (SWAR + snapshots are LE by
+  construction); `Engine_surprise`/`Engine_encode_bytes`/`Engine_feedflush`
+  map the recoverable map-exhaustion (−3) to `RatecError` WITHOUT
+  poisoning — the −3 abort runs between bytes, so the engine stays
+  usable and the documented "reset() recovers" is reachable from Python;
+  `rc_batch` error paths release all buffers (were leaking the first k);
+  `core_reset_keep` re-inits book tables lost to OOM.
+- **New gate: `tests/test_snapfuzz.py` (9/9).** A Python-side v6 layout
+  parser, 37 targeted field mutants (every P1 class), 214 truncations,
+  1200 seeded bit flips with a raise-or-load-clean oracle, the P1-2 hang
+  regression in a subprocess, and the RCZ1 container error-surface check
+  — ≥1000 mutants per run, all deterministic. New fixtures:
+  `v6_c20` / `v6_c33` / `v6_c20carry` snapshots + continuation goldens
+  (generator `tests/gen_v6_goldens.py`, bound in `fixtures_meta.json`).
+
+### P2 — record convention ("so we can put more information in it")
+- `research/record_util.py`: the provenance envelope (ratec_version,
+  deps, git_rev, host, created_utc, inputs sha256-bound) every producer
+  emits in three lines.
+- **README tables are GENERATED**: `make tables` rewrites the sentinel
+  blocks from the committed records; `tests/test_tables.py` (new gate)
+  fails on hand-edited drift and audits every `research/*.json` for the
+  envelope (legacy records kept verbatim, explicitly marked). The
+  fertility table now shows all four domains (code was silently omitted:
+  0.412 → 0.202, −51%).
+- Committed bench records: `research/bench_tiktoken.json`,
+  `bench_c_sweep.json`; `make records` copies fresh results with
+  envelopes and refuses silent result changes.
+- `research/build_streams.py`: the twin study's ratec + bytes streams
+  are producible in-repo from sha-bound corpora (book-mode C=10, len-cap
+  9 documented, manifest binds every output); the bpe arm is honestly
+  documented as out-of-repo. `RATEC_RUNS`/`RATEC_TWIN_DATA` defaults are
+  repo-relative (P2-6); `RATEC_SCALE_PROBE`/`RATEC_SCALE_DATA` documented.
+
+### P3 — tests that generate information
+- `tests/test_fuzz.py` (new gate, 12/12): 118 seeded stream×C property
+  cases (tiling, round-trip, chunked==one-shot, patcher==engine, batch==
+  serial); judge C-independence bitwise across c∈{1,10,20,33,64}; fast
+  lane measured (max rel. deviation 1.18e-07, record
+  `research/fastlane_parity.json`); pf 0..4 bitwise-identical (prefetch
+  depth only); boundary C; map exhaustion recovery; reset-vs-fresh
+  bit-exactness; book-mode snapshot after `feed()`; carry+reset; servo
+  brackets; `warm_state` path; CLI smoke with fractional `--c`.
+- Suite manifest (`tests/test_manifest.json`): per-script exit + wall
+  time, so green-skipped is distinguishable from green-passed.
+
+### P5 — packaging
+- `-march=native` out of the default build (plain x86-64 baseline;
+  `RATEC_ARCH=native|x86-64-v2` opt-in) — wheels stop being SIGILL-bound;
+  bit-exactness re-verified on the baseline build.
+- Version single-sourced from `pyproject.toml` (injected via
+  `-DRC_VERSION`, drift asserted); `[project.urls]` + license/OS
+  classifiers.
+- `MANIFEST.in`: the sdist ships the full gate (tests + fixtures +
+  conftest + Makefile); sdist install smoke in CI.
+
+### CI
+- `.github/workflows/ci.yml`: ubuntu 3.10/3.12 + macOS 3.12 matrix, full
+  `make test` + pytest + scale smoke; sdist install smoke; ASan/UBSan
+  build fed the snapshot-fuzz corpus; a transformers-installed job so
+  `test_smollm2_port` runs instead of skipping everywhere.
 
 ## v0.5.0 — 2026-11 (the design thesis, measured + CI)
 
