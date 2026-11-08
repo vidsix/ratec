@@ -193,28 +193,39 @@ BPE's fertility is frozen at train time — a fixed merge table performs
 identically on byte 1 and byte 10^12. RateC's judge and book adapt as they
 read, so its positions-per-byte on **held-out** data should improve with
 the size of the stream it has already adapted to. `bench/bench_scale.py`
-measures exactly that: one engine, log-spaced adaptation prefixes, the
-**same fixed 128 KB probe** (disjoint from every prefix) scored at each
-scale. On a 15.8 MB en/hr/zh/code pretraining mix (C=20, full record in
+measures exactly that: one warming engine fed each log-spaced prefix
+exactly once, the **same fixed 128 KB probe** (disjoint from every
+prefix) scored at each scale **on a disposable engine loaded from a
+snapshot** — the probe never touches the warming engine. On a 15.8 MB
+en/hr/zh/code pretraining mix (C=20, full record in
 `research/scale_mix15.8MB.json`):
 
 | adaptation seen | units/byte (probe) | vs cold |
 |---|---|---|
 | 0 (cold engine) | 0.157 | — |
-| 64 KB | 0.102 | −35% |
-| 256 KB | 0.082 | −48% |
-| 1 MB | 0.076 | −52% |
-| 8 MB | 0.076 | −52% (saturated) |
+| 64 KB | 0.151 | −4% |
+| 256 KB | 0.148 | −6% |
+| 1 MB | 0.146 | −7% |
+| 8 MB | 0.147 | −7% (saturated) |
 | tiktoken r50k_base (same probe) | 0.431 | flat by construction |
 
-Honest reading: the effect is real and front-loaded — −48 of the −52
-points arrive within the first 256 KB, and the curve saturates at ~0.076
-even though the book keeps growing (1.17 M entries at 8 MB, no further
-fertility benefit). A warm RateC holds **4.2–5.7× fewer LM positions**
-than tiktoken r50k_base on the same bytes (ratio over the 64 KB → 8 MB
-scales). This measures positions-per-byte, not LM quality — the quality
+Honest reading: the adaptation effect is real but modest — about **−7%
+units/byte**, front-loaded (most of it within the first 1 MB) and flat
+after (the 2 MB point measured −7.9%, the best of the curve; the curve
+wobbles ±1 point around saturation). The big fertility gap vs BPE is
+architectural, not cumulative: even a **cold** RateC holds ~2.7× fewer
+LM positions than tiktoken r50k_base on the same bytes, and a warm one
+~2.9×. This measures positions-per-byte, not LM quality — the quality
 question is the twin study's (`research/`), and its scale lever is still
 open.
+
+> **Protocol correction (v0.6.0).** The v0.5.0 table published here
+> (−35%…−52%, "4.2–5.7× fewer") was produced by a flawed protocol: the
+> probe itself was fed into the warming engine at every scale before its
+> measurement (up to 8 × 128 KB of self-ingestion), so the book contained
+> the probe's own n-grams and every warm row was flattered. The engine is
+> unchanged; only the measurement was. Superseded record kept verbatim as
+> `research/scale_mix15.8MB_v0.5.0_superseded.json`.
 
 Reproduce: `RATEC_SCALE_DATA=<your-corpus> make scale` (portable shipped
 fixtures by default; the table above used the same 15.8 MB mix as the

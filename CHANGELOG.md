@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.6.0 — unreleased (the information release, step 1: honest numbers)
+
+- **P0-1 · scale-bench protocol correction (re-measured).** The v0.5.0
+  scale record was produced by a flawed protocol: the "held-out" 128 KB
+  probe was fed into the warming engine at every scale before being
+  measured (up to 8 × 128 KB of self-ingestion), and prefixes were re-fed
+  cumulatively. `bench/bench_scale.py` now feeds each prefix exactly once,
+  snapshots the warming engine, and scores the probe on a disposable
+  engine loaded from that snapshot; per-row `bytes_seen`, probe-tail
+  UTF-8 trimming, and ratec/tiktoken versions + corpus sha256 are recorded.
+  **Corrected result on the same 15.8 MB mix (C=20):** cold 0.157 →
+  64 KB 0.151 (−4%) → 1 MB 0.146 (−7%) → 8 MB 0.147 (−7%, saturated) —
+  the honest adaptation effect is ~−7%, not −52%; warm RateC holds ~2.9×
+  fewer LM positions than tiktoken r50k_base, not 4.2–5.7× (the ~2.7×
+  cold-architectural gap is unchanged). Engine untouched — measurement
+  only. Old record kept verbatim:
+  `research/scale_mix15.8MB_v0.5.0_superseded.json`.
+- **P0-2 · twin study claims made assertable.** Eval coverage is now
+  asserted in code (`covered >= val_bytes − domains`), the false
+  "coverage asserted 100.00%" wording replaced everywhere (coverage is
+  every val byte except each domain's first token), and the ≤9-byte
+  patch-length cap of the twin streams is documented and asserted
+  (`max(id) < V`) on every loaded stream.
+- **P0-3 · README fertility sentence made table-derived** ("26–50%" →
+  "26–60%", numbers identical to the per-domain table).
+- **P0-4 · bench records emit actuals.** `bench/bench_vs_tiktoken.py`
+  no longer writes false protocol fields (pf/reps now come from the
+  running code, both library versions recorded, prebits actual); batch
+  arms timed interleaved round-robin (medians) like the single-thread
+  arms; dead `if False` blocks removed; hardcoded font path guarded (also
+  in `bench_c_sweep.py`); figure label version from `__version__`.
+- **P0-5 · parallel-fertility check demoted to print-only** (1.5 sanity
+  guard); the 10% "informational" bound still failed foreign boxes.
+- **P0-6 · API/CLI robustness.** `surprise --patch` no longer crashes
+  (missing `--c` on the subparser); `--c` is float everywhere (fractional
+  C reachable from the CLI); `patch_from_sur` dtype guard (1-D float32
+  required, float64 cast, other dtypes rejected — float64 bytes silently
+  reinterpreted as float32 produced garbage starts); `pf` docstring now
+  matches the code (auto → `PF_DEFAULT` 2).
+
 ## v0.5.0 — 2026-11 (the design thesis, measured + CI)
 
 - **Efficiency vs scale, measured** (`bench/bench_scale.py`, record in
@@ -11,6 +51,8 @@
   saturating at ~0.076 through 8 MB while the book grows to 1.17 M
   entries. tiktoken r50k_base on the same probe: 0.431 flat — warm
   RateC holds 4.2–5.7× fewer LM positions (64 KB → 8 MB scales).
+  **[Superseded in v0.6.0: the probe was not actually held out — see the
+  protocol correction at the top of this file.]**
   Portable by default (runs on the shipped fixtures; also smoke-verified
   end-to-end on a fresh tree);
   `RATEC_SCALE_DATA=<corpus>` for the full curve, `make scale`.

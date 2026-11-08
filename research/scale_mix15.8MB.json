@@ -4,7 +4,7 @@
   "corpus_kind": "RATEC_SCALE_DATA",
   "probe_bytes": 131072,
   "probe": "fixed tail of the corpus, disjoint from every prefix",
-  "adaptation": "one engine, encode_bytes continues through scales",
+  "adaptation": "one warming engine fed each prefix exactly once (delta feeding, no re-ingestion); at every scale the probe is scored on a disposable engine loaded from a snapshot \u2014 the probe never touches the warming engine",
   "scales": [
    32000,
    64000,
@@ -15,7 +15,12 @@
    2097152,
    4194304,
    8388608
-  ]
+  ],
+  "ratec_version": "0.5.0",
+  "tiktoken_version": "0.14.0",
+  "corpus_sha256": "c655b89aefca25aafeb084bb1d695c4deacbf469f5e7a60cdd1ec3e647089457",
+  "corpus_path": "/home/z/my-project/data/_train_mix.txt",
+  "corpus_file_sha256": "c655b89aefca25aafeb084bb1d695c4deacbf469f5e7a60cdd1ec3e647089457"
  },
  "rows": [
   {
@@ -30,70 +35,77 @@
    "scale": 32000,
    "units_per_byte": 0.15186309814453125,
    "book": 15834,
-   "singleton_frac": 0.7361639369712024
+   "singleton_frac": 0.7361639369712024,
+   "bytes_seen": 32000
   },
   {
    "arm": "ratec warm",
    "scale": 64000,
-   "units_per_byte": 0.10181427001953125,
-   "book": 31812,
-   "singleton_frac": 0.8293115335368857
+   "units_per_byte": 0.15050506591796875,
+   "book": 19299,
+   "singleton_frac": 0.744429882044561,
+   "bytes_seen": 64000
   },
   {
    "arm": "ratec warm",
    "scale": 128000,
-   "units_per_byte": 0.08867645263671875,
-   "book": 52480,
-   "singleton_frac": 0.8548775153105862
+   "units_per_byte": 0.14890289306640625,
+   "book": 26048,
+   "singleton_frac": 0.7507011530071673,
+   "bytes_seen": 128000
   },
   {
    "arm": "ratec warm",
    "scale": 256000,
-   "units_per_byte": 0.08184051513671875,
-   "book": 83139,
-   "singleton_frac": 0.8579337966780539
+   "units_per_byte": 0.147552490234375,
+   "book": 39104,
+   "singleton_frac": 0.7541960784313726,
+   "bytes_seen": 256000
   },
   {
    "arm": "ratec warm",
    "scale": 512000,
-   "units_per_byte": 0.07787322998046875,
-   "book": 133310,
-   "singleton_frac": 0.8580500560328727
+   "units_per_byte": 0.146697998046875,
+   "book": 63272,
+   "singleton_frac": 0.747839188010467,
+   "bytes_seen": 512000
   },
   {
    "arm": "ratec warm",
    "scale": 1048576,
-   "units_per_byte": 0.07586669921875,
-   "book": 221316,
-   "singleton_frac": 0.8612612612612612
+   "units_per_byte": 0.1456146240234375,
+   "book": 109645,
+   "singleton_frac": 0.7498991528842275,
+   "bytes_seen": 1048576
   },
   {
    "arm": "ratec warm",
    "scale": 2097152,
-   "units_per_byte": 0.07489013671875,
-   "book": 379909,
-   "singleton_frac": 0.8500921295077652
+   "units_per_byte": 0.1449432373046875,
+   "book": 194945,
+   "singleton_frac": 0.7428405893064062,
+   "bytes_seen": 2097152
   },
   {
    "arm": "ratec warm",
    "scale": 4194304,
-   "units_per_byte": 0.074951171875,
-   "book": 662534,
-   "singleton_frac": 0.8451387018583356
+   "units_per_byte": 0.14533233642578125,
+   "book": 352377,
+   "singleton_frac": 0.7337921658594613,
+   "bytes_seen": 4194304
   },
   {
    "arm": "ratec warm",
    "scale": 8388608,
-   "units_per_byte": 0.075958251953125,
-   "book": 1169988,
-   "singleton_frac": 0.831297812374178
+   "units_per_byte": 0.14707183837890625,
+   "book": 645098,
+   "singleton_frac": 0.7276218107347043,
+   "bytes_seen": 8388608
   },
   {
    "arm": "tiktoken r50k_base",
    "scale": null,
    "units_per_byte": 0.43115234375
   }
- ],
- "corpus_file": "data/_train_mix.txt (15,811,609 B en/hr/zh/code LM mix, twin-study corpus)",
- "note": "record of the v0.5.0 published run; portable re-run: bench/bench_scale.py (shipped fixtures)"
+ ]
 }
