@@ -58,7 +58,11 @@ static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
 #define WIN 16                  /* inline occurrence window (u16 counts) */
 #define IMAX 65535              /* max inline total (u16 window counts) */
 #define PROMOTED 0xFF           /* distinct marker: count map is author */
+/* Version is single-sourced from pyproject.toml (setup.py injects
+ * -DRC_VERSION); the local define is the fallback for standalone builds. */
+#ifndef RC_VERSION
 #define RC_VERSION "0.6.0"
+#endif
 #define PF_DEFAULT 2
 #define MAP_CAPBITS_DEFAULT 22
 #define ID_NONE 0xFFFFFFFFu

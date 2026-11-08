@@ -1,0 +1,15 @@
+# sdist completeness (PLAN_v0.6 P5-2): a pip-install from the sdist must be
+# able to run the full gate — tests, fixtures, conftest, Makefile all travel.
+include conftest.py
+include Makefile
+include CHANGELOG.md
+include setup.py
+recursive-include tests *.py *.json *.bin *.txt
+recursive-include bench *.py
+recursive-include research *.py *.json *.md
+recursive-include docs *.md
+# never ship compiled artifacts or local run outputs
+global-exclude *.so *.pyd *.o
+prune results
+prune runs
+prune build

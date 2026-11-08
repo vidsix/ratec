@@ -10,14 +10,14 @@
   "deps": {
    "numpy": "2.1.3"
   },
-  "git_rev": "d960abf",
+  "git_rev": "48080de",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-08T12:54:25+00:00",
+  "created_utc": "2026-11-08T12:57:08+00:00",
   "inputs": {}
  },
  "measured_max_relative_deviation": 1.184847775448361e-07

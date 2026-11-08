@@ -20,6 +20,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 RESULTS = []
 
 ENVELOPE_KEYS = ("ratec_version", "deps", "git_rev", "host", "created_utc",
@@ -67,6 +68,15 @@ def main():
     check(f"records carry provenance ({n_env} enveloped, "
           f"{n_legacy} marked legacy)", not bad,
           "; ".join(bad[:3]))
+
+    # version single-sourcing (P5-4): pyproject.toml is the source; the
+    # built engine and the Python package must agree
+    import ratec
+    pp = open(os.path.join(ROOT, "pyproject.toml")).read()
+    ver = pp.split('version = "')[1].split('"')[0]
+    check("version single-sourced (pyproject == ratec.__version__)",
+          ver == ratec.__version__,
+          f"pyproject {ver} vs engine {ratec.__version__}")
 
     print()
     print(f"TABLES GATE: {'PASS' if all(RESULTS) else 'FAIL'} "

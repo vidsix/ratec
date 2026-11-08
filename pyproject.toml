@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ratec"
-version = "0.5.0"
+version = "0.6.0"
 description = "RateC: adaptive rate-based tokenizer (C-bit patches from a 6-order KT judge). No training data, no vocab file."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,9 +14,17 @@ dependencies = ["numpy"]
 classifiers = [
     "Programming Language :: C",
     "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Text Processing :: Linguistic",
 ]
+
+[project.urls]
+Homepage = "https://github.com/vidsix/ratec"
+Changelog = "https://github.com/vidsix/ratec/blob/main/CHANGELOG.md"
+Issues = "https://github.com/vidsix/ratec/issues"
 
 [project.optional-dependencies]
 bench = ["tiktoken", "matplotlib"]
