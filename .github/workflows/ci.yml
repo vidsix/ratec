@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+        exclude:
+          - os: macos-latest
+            python: "3.10"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install numpy (core dep) + tiktoken (bench baseline)
+        run: pip install numpy tiktoken
+      - name: Build C extension in place (baseline ISA, bit-exact flags)
+        run: python setup.py build_ext --inplace
+      - name: Full correctness pass (suite + bit-exactness gate + fuzz + tables)
+        run: make test
+      - name: pytest wrapper (fresh-clone path + manifest)
+        run: python -m pytest tests/ -q
+      - name: Efficiency-vs-scale bench (smoke, shipped fixtures)
+        run: python bench/bench_scale.py
+
+  sdist:
+    # P5-2: a pip install from the sdist must build the engine and work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist
+        run: python setup.py sdist
+      - name: Install from the tarball into a clean prefix
+        run: pip install --target /tmp/ratec-sdist dist/ratec-*.tar.gz
+      - name: Smoke from a directory that contains nothing else
+        working-directory: /tmp
+        run: |
+          python - <<'EOF'
+          import sys; sys.path.insert(0, "/tmp/ratec-sdist")
+          import ratec
+          tok = ratec.RateC(c=17.5)
+          ids = tok.encode("hello 你好 sdist smoke")
+          assert tok.decode(ids) == "hello 你好 sdist smoke"
+          spans = ratec.RateC(c=20, store_book=False).encode_to_spans(b"exact spans tile exactly")
+          assert spans[0][0] == 0 and spans[-1][1] == len(b"exact spans tile exactly")
+          print("sdist smoke ok:", ratec.__version__, len(spans), "patches")
+          EOF
+
+  asan:
+    # P5-3: memory-safety job fed by the snapshot-fuzz mutant corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numpy
+        run: pip install numpy
+      - name: Build with ASan+UBSan
+        env:
+          CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          LDFLAGS: "-fsanitize=address,undefined"
+        run: python setup.py build_ext --inplace
+      - name: Snapshot fuzz + property fuzz under sanitizers
+        env:
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.8
+        run: |
+          python tests/test_snapfuzz.py
+          python tests/test_fuzz.py
+
+  lm-port:
+    # test_smollm2_port must actually RUN somewhere, not skip everywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install core + lm extras (torch/transformers, CPU only)
+        run: |
+          pip install numpy
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install transformers
+      - name: Build + run the HF port test
+        run: |
+          python setup.py build_ext --inplace
+          python tests/test_smollm2_port.py
