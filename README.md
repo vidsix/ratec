@@ -332,8 +332,15 @@ paths to raw speed.
     convention with provenance envelopes, README tables generated from
     records (`make tables` + drift test), property/API test expansion,
     baseline-ISA default build, version single-sourced, complete sdist,
-    CI with ASan + sdist + LM-port jobs. Plan:
-    `docs/PLAN_v0.6.md`.
+    CI with ASan + sdist + LM-port jobs (workflow file lands on the
+    next workflow-scoped push; CHANGELOG documents the withhold).
+    Plan: `docs/PLAN_v0.6.md`.
+14. **The scale ladder (v0.7, planned)** — LM-side scale is the one open
+    roadmap item: 4 arms × 4 rungs (600→4800 steps) on the twin-study
+    protocol, one provenance-enveloped record, the gap-vs-steps trend
+    published either way it lands; frequency-aware book pruning (opt-in,
+    default bit-exact) and the LM-optimal C sweep alongside. Plan:
+    `docs/PLAN_v0.7.md`.
 
 ## Layout
 
@@ -360,7 +367,8 @@ docs/
   PROFILING.md       the ablation profile behind the v2 engine
   v04_design.md      what landed / was measured / was declined, with numbers
   twin_study.md      the paired BPE-vs-RateC LM experiment, with numbers
-  PLAN_v0.6.md       the next version's plan (from the full-repo review)
+  PLAN_v0.6.md       the v0.6.0 plan (from the full-repo review; record)
+  PLAN_v0.7.md       the next version's plan (the scale ladder)
   container.md       container format spec (draft v0.1)
 research/
   twin_study.py      the twin-study harness (protocol in the docstring)
