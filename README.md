@@ -332,8 +332,9 @@ paths to raw speed.
     convention with provenance envelopes, README tables generated from
     records (`make tables` + drift test), property/API test expansion,
     baseline-ISA default build, version single-sourced, complete sdist,
-    CI with ASan + sdist + LM-port jobs (workflow file lands on the
-    next workflow-scoped push; CHANGELOG documents the withhold).
+    CI with ASan + sdist + LM-port jobs (the workflow file landed on the
+    next workflow-scoped push after a scope-blocked first attempt;
+    CHANGELOG documents it).
     Plan: `docs/PLAN_v0.6.md`.
 14. **The scale ladder (v0.7, planned)** — LM-side scale is the one open
     roadmap item: 4 arms × 4 rungs (600→4800 steps) on the twin-study
