@@ -23,8 +23,9 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install numpy (core dep) + tiktoken (bench baseline) + setuptools
         # setuptools is not shipped in 3.12 runner environments (first CI
-        # run caught it: setup.py died with ModuleNotFoundError)
-        run: pip install numpy tiktoken setuptools
+        # run caught it: setup.py died with ModuleNotFoundError); pytest is
+        # needed by the wrapper step below
+        run: pip install numpy tiktoken setuptools pytest
       - name: Build C extension in place (baseline ISA, bit-exact flags)
         run: python setup.py build_ext --inplace
       - name: Full correctness pass (suite + bit-exactness gate + fuzz + tables)
@@ -78,6 +79,12 @@ jobs:
       - name: Snapshot fuzz + property fuzz under sanitizers
         env:
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.8
+          ASAN_OPTIONS: "detect_leaks=0"
+        # leak detection off: LSan flags ~940 KB of CPython interpreter
+        # allocations at shutdown (_PyMem_RawMalloc / PyThread_allocate_lock
+        # stacks, zero engine frames) — interpreter noise, not engine
+        # leaks. The job exists for corruption/OOB/UB, which stays fully
+        # active. Revisit if an engine frame ever shows up in a leak stack.
         run: |
           python tests/test_snapfuzz.py
           python tests/test_fuzz.py
