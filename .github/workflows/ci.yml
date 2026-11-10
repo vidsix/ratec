@@ -21,8 +21,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install numpy (core dep) + tiktoken (bench baseline)
-        run: pip install numpy tiktoken
+      - name: Install numpy (core dep) + tiktoken (bench baseline) + setuptools
+        # setuptools is not shipped in 3.12 runner environments (first CI
+        # run caught it: setup.py died with ModuleNotFoundError)
+        run: pip install numpy tiktoken setuptools
       - name: Build C extension in place (baseline ISA, bit-exact flags)
         run: python setup.py build_ext --inplace
       - name: Full correctness pass (suite + bit-exactness gate + fuzz + tables)
@@ -41,7 +43,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build sdist
-        run: python setup.py sdist
+        run: pip install setuptools && python setup.py sdist
       - name: Install from the tarball into a clean prefix
         run: pip install --target /tmp/ratec-sdist dist/ratec-*.tar.gz
       - name: Smoke from a directory that contains nothing else
@@ -66,8 +68,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install numpy
-        run: pip install numpy
+      - name: Install numpy + setuptools (3.12 runners don't ship either)
+        run: pip install numpy setuptools
       - name: Build with ASan+UBSan
         env:
           CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer -g"
