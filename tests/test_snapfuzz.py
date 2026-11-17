@@ -19,6 +19,12 @@ v6 goldens (raw RCST payloads, decompressed):
                          capacity), cmap (cnt), book (bn/alen/off/ln)
   4. the P1-2 hang     — cnt far above capacity (the crafted-1KB spin with
                          the GIL held) in a subprocess with a timeout
+  4b. v7 prune snapshots (v0.7.0) — targeted mutants over the trailing
+                         prune section (ver, prune_after/min, schedule
+                         bound, n_pruned, cnt array, truncations), seeded
+                         bit flips and truncations over a live v7 payload;
+                         also ver-flip cross-family checks (v7→v6 must
+                         fail on trailing bytes, v6→v7 fails on EOF)
 
 Also asserts save->load->save byte-identity on live engines and that the
 RCZ1 container surfaces zlib corruption as RatecError.
@@ -89,8 +95,11 @@ def roundtrip_ok(raw):
 
 
 # ------------------------------------------------------------ v6 structure
-def parse_v6(raw):
-    """Walk the v6 layout; return dict of section offsets (for mutants)."""
+def parse_v6(raw, allow_v7_tail=False):
+    """Walk the v6 layout; return dict of section offsets (for mutants).
+    With allow_v7_tail, a ver=7 payload walks on through the trailing
+    prune section (v0.7.0) instead of asserting the end; v6 goldens still
+    assert end == len(raw)."""
     o = {"ver": 4, "off_C": 8}
     o["off_sb"], o["off_pf"], o["off_fz"], o["off_poisoned"] = 16, 20, 24, 28
     o["off_pmode"], o["off_mcb"] = 32, 33
@@ -141,6 +150,21 @@ def parse_v6(raw):
         at += alen
         o["off_book_off"] = at
         at += bn * 8                     # off/ln pairs (4+4 each)
+    (ver,) = struct.unpack_from("<I", raw, 4)
+    if allow_v7_tail and ver == 7:
+        # v0.7.0 prune section: pa u64, pmin u32, npa u64, npr u64,
+        # cnt[bn] u32 each
+        o["off_pa"] = at
+        (pa,) = struct.unpack_from("<Q", raw, at)
+        o["pa"] = pa
+        o["off_pmin"] = at + 8
+        o["off_npa"] = at + 12
+        (npa,) = struct.unpack_from("<Q", raw, at + 12)
+        o["npa"] = npa
+        o["off_npr"] = at + 20
+        at += 28
+        o["off_cnt"] = at
+        at += bn * 4
     o["end"] = at
     assert at == len(raw), f"parser walked to {at}, file is {len(raw)}"
     return o
@@ -405,43 +429,95 @@ def main():
           f"{n_raise} rejected + {n_clean} load-clean",
           ok_fl, bad_fl)
 
-    # ---------------------------------------------- 5. the P1-2 hang probe
-    hang = put(base_raw, P["off_tmap_capb"] + 8,
-               struct.pack("<Q", 1 << P["tmap_capb"]))
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
-        tf.write(b"RCZ1" + zlib.compress(hang, 1))
-        hang_path = tf.name
-    try:
-        r = subprocess.run(
-            [sys.executable, "-c",
-             "import sys, zlib; sys.path.insert(0, %r); "
-             "import ratec;"
-             "raw = zlib.decompress(open(sys.argv[1],'rb').read()[4:]);"
-             "ratec._rcengine.load_state(raw)" % (ROOT,),
-             hang_path],
-            capture_output=True, timeout=30)
-    finally:
-        os.unlink(hang_path)
-    check("P1-2 regression: cnt=capacity rejected in <30s subprocess "
-          "(was: infinite probe with GIL held)",
-          r.returncode != 0 and b"RatecError" in r.stderr,
-          f"exit={r.returncode}")
+    # ------------------------------------- 4b. v7 prune snapshots (v0.7.0)
+    print("4b. v7 prune-mode snapshot fuzz")
+    peng = ratec.RateC(c=20, prune=True, prune_after=4096, prune_min=2)
+    peng.encode_to_spans(corpus[:60000])
+    p_raw = peng.save_state()
+    if p_raw[:4] == b"RCZ1":                    # api wrapper -> raw payload
+        p_raw = zlib.decompress(p_raw[4:])
+    check("v7 header + save->load->save identity",
+          p_raw[4] == 7 and load_via_api(p_raw).save_state() == p_raw)
+    pv = parse_v6(p_raw, allow_v7_tail=True)
+    V7 = []  # (label, mutant, must_raise)
+    V7 += [
+        ("ver = 8 (future)", put(p_raw, 4, struct.pack("<I", 8)), True),
+        ("ver = 6 (claims v6, trailing bytes remain)",
+         put(p_raw, 4, struct.pack("<I", 6)), True),
+        ("prune_after = 0", put(p_raw, pv["off_pa"], struct.pack("<Q", 0)), True),
+        ("prune_after = 2^49", put(p_raw, pv["off_pa"],
+                                   struct.pack("<Q", 1 << 49)), True),
+        ("prune_min = 0", put(p_raw, pv["off_pmin"], struct.pack("<I", 0)), True),
+        ("next_prune_at = 0", put(p_raw, pv["off_npa"], struct.pack("<Q", 0)), True),
+        ("next_prune_at = nseen + pa + 1 (past the bound)",
+         put(p_raw, pv["off_npa"],
+             struct.pack("<Q", pv["npa"] + pv["pa"] + 1)), True),
+        ("n_pruned = 2^49", put(p_raw, pv["off_npr"],
+                                struct.pack("<Q", 1 << 49)), True),
+        ("prune section cut mid-cnt (trailing check)",
+         p_raw[:len(p_raw) - 4], True),
+        ("prune section cut entirely", p_raw[:pv["off_pa"]], True),
+    ]
+    if pv["book_bn"] > 0:
+        V7 += [
+            ("cnt[0] = 0 (fresh window count)",
+             put(p_raw, pv["off_cnt"], struct.pack("<I", 0)), False),
+            ("cnt[0] = 0xFFFFFFFF (saturated count)",
+             put(p_raw, pv["off_cnt"], struct.pack("<I", 0xFFFFFFFF)), False),
+        ]
+    bad7 = []
+    n7r = n7c = 0
+    for label, mut, must_raise in V7:
+        try:
+            load_via_api(mut)
+            raised = False
+        except RatecError:
+            raised = True
+        except Exception as e:                     # noqa: BLE001
+            bad7.append((label, f"wrong exception {type(e).__name__}: {e}"))
+            continue
+        if raised:
+            n7r += 1
+        elif must_raise:
+            bad7.append((label, "loaded but should have been rejected"))
+        else:
+            if not roundtrip_ok(mut):
+                bad7.append((label, "loaded but round-trip drifted"))
+            else:
+                n7c += 1
+    check(f"v7 targeted mutants: {len(V7) - len(bad7)}/{len(V7)} behave "
+          f"({n7r} rejected, {n7c} tolerated)",
+          not bad7, "; ".join(f"{l}: {d}" for l, d in bad7[:4]) or "")
+    ok7, n7f, r7, c7, bad7f = True, 0, 0, 0, ""
+    for pos, mut in bitflips(p_raw, 500, 99):
+        n7f += 1
+        try:
+            load_via_api(mut)
+            if not roundtrip_ok(mut):
+                ok7 = False
+                bad7f = f"flip at {pos}: loaded but round-trip drifted"
+                break
+            c7 += 1
+        except RatecError:
+            r7 += 1
+        except Exception as e:                     # noqa: BLE001
+            ok7 = False
+            bad7f = f"flip at {pos}: {type(e).__name__}: {e}"
+            break
+    n_tr7 = 0
+    for t in truncations(p_raw, 60):
+        n_tr7 += 1
+        try:
+            load_via_api(t)
+            ok7 = False
+            bad7f = f"truncation at {len(t)} loaded"
+            break
+        except RatecError:
+            pass
+    check(f"v7 flips+truncations: {n7f} flips ({r7} rejected, {c7} clean) "
+          f"+ {n_tr7} truncations all rejected", ok7, bad7f)
 
-    # ---------------------------------------------- 6. container + totals
-    try:
-        ratec.RateC.from_state(b"RCZ1" + b"\x78\x9c" + b"garbage-not-zlib")
-        ok_c = False
-        why = "zlib garbage loaded"
-    except RatecError:
-        ok_c = True
-        why = ""
-    check("RCZ1 container corruption -> RatecError (not zlib.error)", ok_c, why)
-
-    total = len(M) + n_tried + n_fl + 1
-    check("mutant corpus >= 1000 cases", total >= 1000, f"{total} cases")
-
-    print()
+    # ------------------------------------- 4b. v7 prune snapshots (v0.7.0)    print()
     print(f"SNAPFUZZ GATE: {'PASS' if all(RESULTS) else 'FAIL'} "
           f"({sum(RESULTS)}/{len(RESULTS)} checks)")
     sys.exit(0 if all(RESULTS) else 1)

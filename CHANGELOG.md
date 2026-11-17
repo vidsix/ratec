@@ -1,5 +1,104 @@
 # Changelog
 
+## v0.7.0 — 2026-11 (the scale-ladder release)
+
+The s2400 probe's two points become a measured trend: the 4-arm × 4-rung
+scale ladder, the engine feature its hypothesis points at (frequency-aware
+book pruning), and the LM-optimal C sweep — every record provenance-
+enveloped, every number table-generated and drift-guarded. Plan:
+`docs/PLAN_v0.7.md`.
+
+### P1 — the scale ladder
+- **`research/run_ladder.py`** — 4 arms (`bpe`, `ratec_direct`,
+  `ratec` factorized, `bytes`) × 4 rungs (600/1200/2400/4800 steps,
+  log-spaced ×2), the twin-study protocol frozen everywhere else
+  (d=96/3 layers/4 heads/ctx 256/batch 16/seed 42, identical bytes,
+  full-coverage byte-weighted BPB). Rung 600 is seeded from the committed
+  `research/twin_{arm}.json` records (protocol-identity asserted field by
+  field); every rung ≥ 1200 is a fresh run (OneCycle recomputed per rung —
+  no warm-starting across rungs, which would confound the trend), executed
+  through `twin_study.py` so all training/eval/checkpoint machinery stays
+  in the one protocol file. Resumable at two levels (completed rung
+  records are skipped; an interrupted run resumes its checkpoint), and
+  `research/twin_ladder.json` is rewritten after EVERY completed run — a
+  killed runner never loses more than the run in flight. Both trend
+  interpretations were pre-registered in the plan before any rung above
+  600 was trained, so the record cannot be curve-fit post hoc.
+- **Protocol bug found by the first ladder execution (P0-2 follow-up).**
+  The v0.6.0 coverage assert assumed each domain's first val token is one
+  byte; RateC val streams can open with a multi-byte patch, so the
+  `ratec`/`ratec_direct` arms legitimately cover `val_bytes − 5` and the
+  tightened assert failed by one byte. The assert now checks the exact
+  invariant (`covered == val_bytes − first-token bytes`); recorded numbers
+  were never affected (first-token bytes were never targets — the
+  committed 600-step records carry `val_bytes_covered` consistent with
+  the corrected invariant).
+
+### P2 — frequency-aware book pruning (opt-in, default bit-exact)
+- **Engine (`ratec.RateC(prune=True, prune_after=1<<20, prune_min=2)`).**
+  The book gains per-entry window counts; at every patch close whose end
+  offset crosses a multiple of `prune_after` bytes, entries whose
+  since-last-prune count is below `prune_min` are dropped (default: drop
+  singletons — the starvation mechanism the probe hypothesized) and the
+  survivors are renumbered dense in first-seen order (in-place compaction,
+  allocation-free, hash rebuilt). Boundaries are absolute stream offsets,
+  so the prune sequence is identical for chunked and one-shot ingestion.
+  Byte segmentation is unaffected — the patcher is book-independent —
+  spans are identical with and without pruning; only id assignment churns
+  at prune boundaries.
+- **Default path byte-identical, snapshot format v6 unchanged; prune-mode
+  snapshots are v7** (v6 layout + trailing prune section: interval,
+  threshold, schedule, cumulative removals, window counts). v2–v6 readers
+  reject v7 cleanly (version check); the reader accepts v2–v7 and keeps
+  the strict trailing-garbage check — which is why the section rides on a
+  version bump rather than trailing on v6 (the v0.6.0 hardening must not
+  move). v7 load validation: interval/threshold ≥ 1, interval ≤ 2^48,
+  schedule within one interval past `nseen`.
+- **Invariants gated (`tests/test_prune.py`, 25 checks):** prune off ==
+  prune kwarg absent (ids, spans, snapshot bytes); spans invariant to
+  pruning; ids identical up to the first boundary; determinism across
+  fresh engines AND feed chunkings (output level — snapshot bytes are
+  layout-dependent and were never chunking-invariant, v0.6.0 included);
+  within-epoch decode round-trips; cross-epoch ids cleanly rejected
+  (RatecError); v7 snapshot resumes pruning exactly (open patch spans the
+  save point); v6 snapshots load unchanged; `prune_min` semantics
+  deterministic; empty-book continuation; bookless no-op; carry-mode
+  composition; reset restores virgin behavior.
+- **Snapshot fuzz gate extended to v7** (`tests/test_snapfuzz.py` §4b):
+  targeted mutants over the prune section (version flips both directions,
+  interval/threshold/schedule bounds, n_pruned, cnt array, section
+  truncations), seeded bit flips and truncations over a live v7 payload,
+  save→load→save identity.
+- **The LM measurement** (`research/run_prune_lm.py` →
+  `research/book_pruning.json`): ratec_direct at C=10, 2400 steps, pruned
+  vs unpruned single-engine dense streams — identical byte segmentation
+  asserted per domain (token counts and lens), only id assignment differs;
+  engine stats (book sizes, `n_pruned`) reported beside the BPB delta.
+  Pre-registered: if the win is within the determinism band, the feature
+  stays opt-in and the doc says so.
+
+### P3 — the LM-optimal C sweep
+- **`research/run_c_sweep.py` → `research/lm_c_sweep.json`**: ratec_direct
+  at C ∈ {8, 10, 12}, 2400 steps each, on single-engine dense-id streams
+  (`research/build_streams.py --c C`: one engine tokenizes the whole
+  corpus — chunked feed, one-shot-equivalent — and the val streams
+  continue the SAME engine so val ids live in the train book, the shipped
+  streams' proven design). The library's own C sweep optimizes tokenizer
+  rate; this one asks the downstream question at probe scale. Parameter
+  growth with C is reported per run as an explicit confound; interpretations
+  pre-registered (interior argmin vs monotone-to-edge).
+- **`twin_study.py` gains `--c`, `--prefix`, `--lens_lidx`** (all
+  default-preserving): dense-id streams need the length field from true
+  byte lengths (the documented (id, byte_len) contract) instead of id
+  arithmetic, which is only well-defined for the shipped packed-id
+  streams; provenance for both stream generations documented in
+  `research/README.md`.
+
+### P4 — tests
+- `tests/test_prune.py` added to the suite (the 8th gate) and registered
+  in `conftest.py` / `tests/test_suite.py`; the suite manifest records it
+  like every gate.
+
 ## v0.6.0 — 2026-11 (the information release)
 
 Everything published is now regenerable, every hard claim is guarded by a

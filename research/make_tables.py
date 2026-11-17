@@ -66,9 +66,48 @@ def render_fertility(rec):
     return "\n".join(lines) + "\n"
 
 
+# ----------------------------------------------------------------- ladder
+def _sgn(v):
+    """Signed value with the README's typographic minus (never doubled)."""
+    return ("%s%.3f" % (MINUS, abs(v))) if v < 0 else ("%.3f" % v)
+
+
+def render_ladder(rec):
+    """The LM-side scale ladder (PLAN_v0.7 P1): BPB per arm at each rung,
+    with the headline gap (bpe − ratec_direct) and its log-steps slope."""
+    rungs = sorted(int(r) for r in rec.get("rungs", {}))
+    arms = ("bpe", "ratec_direct", "ratec", "bytes")
+    lines = ["| steps | bpe | ratec_direct | ratec (factorized) | bytes floor "
+             "| gap bpe−ratec_direct |", "|---|---|---|---|---|---|"]
+    for r in rungs:
+        e = rec["rungs"][str(r)]
+        vals = [e.get(a, {}).get("final_bpb_overall") for a in arms]
+        gap = (vals[0] - vals[1]) if None not in (vals[0], vals[1]) else None
+        lines.append("| %d | %s | %s | %s | %s | %s |" % (
+            r,
+            "—" if vals[0] is None else "%.3f" % vals[0],
+            "—" if vals[1] is None else "%.3f" % vals[1],
+            "—" if vals[2] is None else "%.3f" % vals[2],
+            "—" if vals[3] is None else "%.3f" % vals[3],
+            "—" if gap is None else _sgn(gap)))
+    s = rec.get("slopes", {}).get("bpe_minus_ratec_direct", {})
+    if "bpb_per_doubling" in s:
+        # a positive slope means the (negative) gap shrinks toward zero:
+        # the tokenization deficit narrows by that many BPB per doubling
+        # of training compute; negative would mean it widens
+        lines.append("")
+        lines.append(
+            "Gap slope: **%s BPB per log2-doubling** (least squares "
+            "over the %d completed rungs; the gap %s with training scale)."
+            % (_sgn(s["bpb_per_doubling"]), s["points"],
+               "narrows" if s["bpb_per_doubling"] > 0 else "WIDENS"))
+    return "\n".join(lines) + "\n"
+
+
 TABLES = {
     "scale": ("research/scale_mix15.8MB.json", render_scale),
     "fertility": ("research/bench_tiktoken.json", render_fertility),
+    "ladder": ("research/twin_ladder.json", render_ladder),
 }
 
 

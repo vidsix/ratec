@@ -91,6 +91,52 @@ Artifacts: `research/twin_probe_s2400.json` (digest), plus per-arm JSONs,
 curves and checkpoints in the authoring workspace
 (`runs/twin_*_s2400.*`).
 
+## Scale ladder (v0.7.0) — the trend, measured
+
+The 2400-step probe above ends with the honest caveat *"direction
+confirmed, trend not established: two points"*. The ladder is the fix:
+the same frozen protocol re-run at four training scales, four arms, both
+interpretations pre-registered in `docs/PLAN_v0.7.md` **before any rung
+above 600 was trained**:
+
+- if the gap keeps narrowing with an approximately constant log-slope,
+  that IS the "more efficient with scale" claim, stated with its measured
+  slope and range;
+- if it plateaus, the doc says where it plateaus. Either way the record
+  is the contribution.
+
+Rungs are log-spaced (steps ∈ {600, 1200, 2400, 4800}); the 600 rung is
+the committed v0.4.1 result (protocol-identity asserted, not re-run);
+every rung above it is a fresh run — OneCycle is recomputed per rung and
+no arm is warm-started from a lower rung, which would confound the trend
+with curriculum effects. The runner (`research/run_ladder.py`) rewrites
+`research/twin_ladder.json` after every completed run, so the record on
+disk always reflects exactly the compute that has landed; the generated
+README table (`make tables`, drift-guarded) publishes BPB per arm per
+rung plus the headline number — the least-squares slope of the
+(bpe − ratec_direct) gap against log2(steps), i.e. how many BPB per
+doubling of training compute the tokenization deficit narrows by, with
+the per-domain breakdown and both arms' own improvement slopes in the
+record.
+
+Reading the ladder (the numbers live in the record and the README table;
+this section states how they must be read, not what they are): the arms
+differ in bytes-per-token, so identical FLOPs buy each arm different
+unique-byte coverage — compute-matched, as everywhere in this study.
+The gap that matters is `bpe − ratec_direct` (the direct-interface cost
+isolated from the factorized architecture) and `bpe − ratec` (the shipped
+architecture, whose factorized input adds no meaningful cost at 600
+steps — Δ 0.02 BPB). The `bytes` floor is the no-tokenizer control: if
+`ratec` ever crosses it, the tokenization has stopped earning its keep
+at that scale. Pre-registration cuts both ways: a plateau is published
+as a plateau with its scale, a narrowing as a slope with its exponent —
+neither is curve-fit after the fact.
+
+Artifacts: `research/twin_ladder.json` (provenance-enveloped record,
+rewritten per completed run), `research/run_ladder.py` (resumable
+runner), the README ladder table, and per-run JSONs/curves/checkpoints
+in the workspace (`runs/twin_{arm}_l{rung}.*`).
+
 ## Artifacts
 
 - `research/twin_summary.json` — machine-readable digest of the 600-step

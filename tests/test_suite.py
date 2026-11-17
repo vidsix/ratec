@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 SCRIPTS = ["test_ratec.py", "test_v04.py", "test_profiles.py",
            "test_smollm2_port.py", "test_snapfuzz.py", "test_tables.py", "test_fuzz.py",
-           "gate_bitexact.py"]
+           "test_prune.py", "gate_bitexact.py"]
 
 MANIFEST = os.path.join(HERE, "test_manifest.json")
 

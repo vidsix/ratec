@@ -112,20 +112,24 @@ class Block(nn.Module):
 
 
 class TwinLM(nn.Module):
-    def __init__(self, kind, d=96, layers=3, heads=4, ctx=256):
+    def __init__(self, kind, d=96, layers=3, heads=4, ctx=256,
+                 c_eff=None, v_eff=None, lens_lidx=False):
         super().__init__()
         self.kind = kind
         self.ctx = ctx
-        self.vocab = {"bpe": V, "ratec": V, "bytes": 256}[kind]
+        self.c_eff = C if c_eff is None else c_eff
+        self.v_eff = V if v_eff is None else v_eff
+        self.lens_lidx = lens_lidx
+        self.vocab = {"bpe": self.v_eff, "ratec": self.v_eff, "bytes": 256}[kind]
         if kind == "bpe":
-            self.emb = nn.Embedding(V, d)
+            self.emb = nn.Embedding(self.v_eff, d)
             self.in_proj = None
         elif kind == "bytes":
             self.emb = nn.Embedding(256, d)
             self.in_proj = None
         else:
-            self.ec = nn.Embedding(256 + (2 ** C), d)      # bytes + CDF content rows
-            self.el = nn.Embedding(2 + C, 32)              # length field
+            self.ec = nn.Embedding(256 + (2 ** self.c_eff), d)  # bytes + content rows
+            self.el = nn.Embedding(2 + self.c_eff, 32)          # length field
             self.in_proj = nn.Linear(d + 32, d)
         self.pos = nn.Embedding(ctx, d)
         self.blocks = nn.ModuleList([Block(d, heads) for _ in range(layers)])
@@ -141,17 +145,26 @@ class TwinLM(nn.Module):
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.zeros_(m.bias)
 
-    def content_len_idx(self, ids):
-        content = torch.where(ids < 256, ids, 256 + (ids - 256) % (2 ** C))
-        lidx = torch.where(ids < 256, torch.zeros_like(ids),
-                           1 + (ids - 256) // (2 ** C))
+    def content_len_idx(self, ids, lens=None):
+        m = 2 ** self.c_eff
+        content = torch.where(ids < 256, ids, 256 + (ids - 256) % m)
+        if self.lens_lidx:
+            # dense-id streams: the length field comes from the token's
+            # true byte length (the documented (id, byte_len) contract),
+            # not from id arithmetic — which is only well-defined for the
+            # shipped packed-id streams. lens: byte length per input token.
+            cap = torch.full_like(ids, self.c_eff)
+            lidx = torch.where(ids < 256, torch.zeros_like(ids),
+                               torch.clamp(lens - 1, min=0) .clamp(max=cap))
+            return content, lidx
+        lidx = torch.where(ids < 256, torch.zeros_like(ids), 1 + (ids - 256) // m)
         return content, lidx
 
-    def forward(self, idx):
+    def forward(self, idx, lens=None):
         T = idx.shape[1]
         pos = torch.arange(T, device=idx.device)
         if self.kind == "ratec":
-            c, l = self.content_len_idx(idx)
+            c, l = self.content_len_idx(idx, lens)
             x = self.in_proj(torch.cat([self.ec(c), self.el(l)], dim=-1)) + self.pos(pos)[None]
         else:
             x = self.emb(idx) + self.pos(pos)[None]
@@ -186,7 +199,9 @@ def eval_full(model, va_flat, va_lens, bounds, ctx):
             chunk = va_flat[s:s + T + 1]
             x = torch.from_numpy(chunk[:-1].astype(np.int64))[None]
             y = torch.from_numpy(chunk[1:].astype(np.int64))[None]
-            logp = F.log_softmax(model(x)[0], dim=-1)
+            xl = torch.from_numpy(
+                va_lens[di][s - b0:s - b0 + T].astype(np.int64))[None]
+            logp = F.log_softmax(model(x, xl)[0], dim=-1)
             nll = -logp[torch.arange(T), y[0]] / math.log(2)
             bits += float(nll.sum())
             # byte weight = lens of the TARGET POSITIONS, domain-LOCAL
@@ -216,7 +231,8 @@ def eval_quick(model, ids, va_ids, va_lens, ctx, max_chunks=200):
             break
         x = torch.from_numpy(chunk[:-1].astype(np.int64))[None]
         y = torch.from_numpy(chunk[1:].astype(np.int64))[None]
-        logp = F.log_softmax(model(x)[0], dim=-1)
+        xl = torch.from_numpy(flat_lens[s:s + ctx].astype(np.int64))[None]
+        logp = F.log_softmax(model(x, xl)[0], dim=-1)
         nll = -logp[torch.arange(ctx), y[0]] / math.log(2)
         tot_bits += float(nll.sum())
         tot_bytes += int(flat_lens[s + 1:s + ctx + 1].sum())
@@ -241,6 +257,16 @@ def main():
     ap.add_argument("--ckpt_every", type=int, default=50,
                     help="save a resumable checkpoint every N steps "
                          "(runs/twin_{kind}{tag}.ckpt)")
+    ap.add_argument("--c", type=int, default=C,
+                    help="ratec patch-budget C for the sweep (default 10; "
+                         "scales the 2^C content rows and the V table)")
+    ap.add_argument("--prefix", default="",
+                    help="stream filename prefix override (default: "
+                         "bpe_mix for bpe, ratec_main otherwise)")
+    ap.add_argument("--lens_lidx", action="store_true",
+                    help="dense-id stream interface: length field from the "
+                         "token's true byte length instead of id arithmetic "
+                         "(required when ids are dense engine book ids)")
     args = ap.parse_args()
 
     torch.manual_seed(42)
@@ -250,8 +276,17 @@ def main():
     if args.kind == "bytes":
         tr_ids, tr_lens, va_ids, va_lens, bounds = load_bytes_streams()
     else:
-        prefix = "bpe_mix" if args.kind == "bpe" else "ratec_main"
+        prefix = args.prefix or ("bpe_mix" if args.kind == "bpe" else "ratec_main")
         tr_ids, tr_lens, va_ids, va_lens, bounds = load_streams(prefix)
+    c_eff = int(args.c)
+    if args.lens_lidx:
+        # dense-id streams: the head table must cover the book's id range
+        # (there is no packed length-slab structure to size it from)
+        v_eff = max(256 + 9 * (2 ** c_eff),
+                    int(tr_ids.max()) + 1,
+                    max(int(a.max()) for a in va_ids) + 1)
+    else:
+        v_eff = 256 + 9 * (2 ** c_eff)
     train_bytes = int(tr_lens.sum())
     val_bytes = int(sum(v.sum() for v in va_lens))
     val_tokens = int(sum(len(v) for v in va_ids))
@@ -265,22 +300,30 @@ def main():
     # patch-id range: the length-row cap means no stream id may reach V
     # (would be an out-of-range embedding lookup anyway — assert the
     # producer honored the documented <=9-byte patch cap)
-    if args.kind != "bytes":
+    # patch-id range: the length-row cap means no stream id may reach V
+    # (would be an out-of-range embedding lookup anyway — assert the
+    # producer honored the documented <=9-byte patch cap). Dense-id runs
+    # (lens_lidx) size V_eff from the id range itself, so no assert.
+    if args.kind != "bytes" and not args.lens_lidx:
         va_max = max(int(a.max()) for a in va_ids)
-        assert int(tr_ids.max()) < V and va_max < V, \
+        assert int(tr_ids.max()) < v_eff and va_max < v_eff, \
             "stream id >= V: patch-length cap violated"
 
     interface = {
-        "bpe": "tied embedding/head over 9472 rows",
-        "ratec": f"factorized input (256+2^{C} content rows, {2+C} length rows @32, "
-                 f"in_proj) + untied head over 9472; C={C} patch ids",
-        "ratec_direct": f"tied embedding/head over 9472 rows on the SAME RateC "
-                        f"C={C} patch ids as 'ratec' (isolates interface cost)",
+        "bpe": f"tied embedding/head over {v_eff} rows",
+        "ratec": f"factorized input (256+2^{c_eff} content rows, {2+c_eff} length rows @32, "
+                 f"in_proj) + untied head over {v_eff}; C={c_eff} patch ids",
+        "ratec_direct": f"tied embedding/head over {v_eff} rows on the SAME RateC "
+                        f"C={c_eff} patch ids as 'ratec' (isolates interface cost)",
         "bytes": "tied embedding/head over 256 rows (raw-byte floor)",
     }[args.kind]
+    if args.lens_lidx:
+        interface += ("; dense-id streams: content slot = (id-256) mod 2^C, "
+                      "length field from true byte length")
 
     model_kind = "bpe" if args.kind == "ratec_direct" else args.kind
-    model = TwinLM(model_kind, d=args.d, layers=args.layers, ctx=args.ctx)
+    model = TwinLM(model_kind, d=args.d, layers=args.layers, ctx=args.ctx,
+                   c_eff=c_eff, v_eff=v_eff, lens_lidx=args.lens_lidx)
     params = n_params(model)
     print(f"[{args.kind}] params {params:,}  interface: {interface}", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95),
@@ -320,7 +363,10 @@ def main():
                 tr_ids[o:o + args.ctx].astype(np.int64)) for o in offs])
             y = torch.stack([torch.from_numpy(
                 tr_ids[o + 1:o + args.ctx + 1].astype(np.int64)) for o in offs])
-            logits = model(x)
+            xl = (torch.from_numpy(np.stack(
+                [tr_lens[o:o + args.ctx] for o in offs]).astype(np.int64))
+                if args.lens_lidx else None)
+            logits = model(x, xl)
             loss = F.cross_entropy(logits.reshape(-1, model.vocab), y.reshape(-1))
             opt.zero_grad()
             loss.backward()
@@ -345,16 +391,23 @@ def main():
     va_flat = np.concatenate(va_ids)
     bpb, per_dom, covered = eval_full(model, va_flat, va_lens, bounds, args.ctx)
     # coverage is exact-by-construction but assert it, never assume it:
-    # every val byte except each domain's first token is a target exactly
-    # once (the first token of a domain has no in-domain predecessor)
-    assert covered >= val_bytes - len(DOMAINS), \
-        f"coverage hole: {covered} of {val_bytes} bytes covered"
+    # every val byte except each domain's first TOKEN is a target exactly
+    # once — the first token has no in-domain predecessor, and ALL of its
+    # bytes are uncovered (ratec val streams can open with a multi-byte
+    # patch; the v0.6.0 assert assumed 1-byte first tokens and falsely
+    # failed such arms — caught by the first ladder execution, v0.7.0)
+    first_tok_bytes = int(sum(int(v[0]) for v in va_lens))
+    assert covered == val_bytes - first_tok_bytes, \
+        f"coverage hole: {covered} of {val_bytes} bytes covered " \
+        f"(expected exactly {val_bytes - first_tok_bytes})"
     nominal_tokens = args.steps * args.batch * args.ctx
     res = {
         "kind": args.kind, "interface": interface,
         "d": args.d, "layers": args.layers, "ctx": args.ctx,
         "batch": args.batch, "steps": args.steps, "lr": args.lr, "seed": 42,
         "params": params, "vocab_effective": model.vocab,
+        "c_eff": c_eff, "v_eff": v_eff, "lens_lidx": bool(args.lens_lidx),
+        "stream_prefix": prefix if args.kind != "bytes" else "(raw bytes)",
         "train_bytes": train_bytes, "train_tokens": len(tr_ids),
         "val_bytes": val_bytes, "val_tokens": val_tokens,
         "val_bytes_per_token": val_bytes / val_tokens,
@@ -364,8 +417,10 @@ def main():
         "val_bytes_covered": covered,
         "val_coverage": covered / val_bytes,
         "val_coverage_note": "every val byte except each domain's first "
-                             "token (that token is never a target); "
-                             "asserted covered >= val_bytes - domains",
+                             "token is a target exactly once (that token "
+                             "has no in-domain predecessor); all of its "
+                             "bytes are uncovered — asserted EXACTLY in "
+                             "code (val_bytes - first-token bytes)",
         "train_flops_est": 6 * params * nominal_tokens,
         "flops_per_train_byte_est": 6 * params * nominal_tokens / train_bytes,
         "wall_sec": wall, "curve": curve,

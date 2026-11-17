@@ -47,6 +47,24 @@ class RateC:
         Snapshot bytes or path produced by `save_state` — cold-start is
         avoided and the judge starts already adapted (RateC's optional
         "model file"; entirely optional).
+    prune : bool
+        Frequency-aware book pruning (v0.7, opt-in; default off). At every
+        `prune_after` bytes of stream position, book entries whose
+        since-last-prune occurrence count is below `prune_min` are dropped
+        and the surviving ids renumbered dense (first-seen order kept).
+        Targets singleton starvation: patch types seen rarely occupy the
+        fixed id budget downstream LMs must spend embedding rows on.
+        Byte segmentation is UNAFFECTED (the patcher is book-independent) —
+        spans are identical with and without pruning; only id assignment
+        churns at prune boundaries. Consequences, documented and tested:
+        ids emitted before a prune may stop decoding on the pruned engine
+        (`decode_bytes` rejects them cleanly), and prune-mode snapshots
+        use snapshot format v7 (older ratec versions reject them cleanly;
+        non-prune snapshots remain byte-identical v6).
+    prune_after : int
+        Prune interval in bytes (default 1 MiB; must be >= 1 when `prune`).
+    prune_min : int
+        Since-last-prune count threshold (default 2: drop singletons).
 
     Notes
     -----
@@ -59,10 +77,18 @@ class RateC:
 
     def __init__(self, c: float = 20, store_book: bool = True, pf: int = -1,
                  warm_state=None, prebits: int = 16, map_capbits: int = 22,
-                 exact: bool = True, carry: bool = False):
+                 exact: bool = True, carry: bool = False,
+                 prune: bool = False, prune_after: int = 1 << 20,
+                 prune_min: int = 2):
+        if prune and prune_after < 1:
+            raise ValueError("prune_after must be >= 1 when prune=True")
+        if prune_min < 1:
+            raise ValueError("prune_min must be >= 1")
         self._eng = _rc.Engine(c=c, store_book=store_book, pf=pf,
                                prebits=prebits, map_capbits=map_capbits,
-                               exact=exact, carry=carry)
+                               exact=exact, carry=carry,
+                               prune_after=prune_after if prune else 0,
+                               prune_min=prune_min)
         if warm_state is not None:
             state = warm_state
             if isinstance(state, str):
@@ -247,6 +273,21 @@ class RateC:
     @property
     def n_forced(self) -> int:
         return self._eng.n_forced
+
+    @property
+    def n_pruned(self) -> int:
+        """Book entries removed by pruning so far (0 unless prune=True)."""
+        return self._eng.n_pruned
+
+    @property
+    def prune_after(self) -> int:
+        """Prune interval in bytes (0 = pruning disabled)."""
+        return self._eng.prune_after
+
+    @property
+    def prune_min(self) -> int:
+        """Since-last-prune count threshold."""
+        return self._eng.prune_min
 
     def __repr__(self):
         return (f"RateC(c={self.c}, store_book={self._eng.store_book}, "

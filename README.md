@@ -221,8 +221,8 @@ wobbles ±1 point around saturation). The big fertility gap vs BPE is
 architectural, not cumulative: even a **cold** RateC holds ~2.7× fewer
 LM positions than tiktoken r50k_base on the same bytes, and a warm one
 ~2.9×. This measures positions-per-byte, not LM quality — the quality
-question is the twin study's (`research/`), and its scale lever is still
-open.
+question is the twin study's (`research/`), and its scale lever is the
+ladder below (v0.7.0).
 
 > **Protocol correction (v0.6.0).** The v0.5.0 table published here
 > (−35%…−52%, "4.2–5.7× fewer") was produced by a flawed protocol: the
@@ -235,6 +235,26 @@ open.
 Reproduce: `RATEC_SCALE_DATA=<your-corpus> make scale` (portable shipped
 fixtures by default; the table above used the same 15.8 MB mix as the
 twin study).
+
+### The LM-side scale ladder (v0.7.0)
+
+The s2400 probe's verdict was *"direction confirmed, trend not
+established: two points"*. The ladder turns it into a measured trend:
+four arms × four rungs (log-spaced ×2), one frozen protocol (d=96,
+3 layers, 4 heads, ctx 256, batch 16, seed 42, identical 15,811,609-B
+train / 659,473-B val bytes, full-coverage byte-weighted BPB), both
+interpretations pre-registered in `docs/PLAN_v0.7.md` before any rung
+above 600 was trained. BPB by arm at each rung, plus the headline gap:
+
+<!-- table:ladder generated from research/twin_ladder.json — do not edit; run make tables -->
+| steps | bpe | ratec_direct | ratec (factorized) | bytes floor | gap bpe−ratec_direct |
+|---|---|---|---|---|---|
+| 600 | 3.112 | 4.796 | 4.816 | 4.147 | −1.684 |
+<!-- /table:ladder -->
+
+Record with per-domain numbers, provenance envelope and the pre-registered
+interpretations: `research/twin_ladder.json`; narrative and the fit:
+`docs/twin_study.md`.
 
 ## Performance (2-core sandbox, C=20)
 
@@ -300,9 +320,9 @@ paths to raw speed.
    `docs/twin_study.md` + `research/`. **Training-scale probe (4× steps,
    post-v0.4.1):** the gap narrows 1.684 → 1.212 BPB (−28.1%); RateC
    improves 1.94× more than BPE for the same extra compute, in every
-   domain. Next: full 4-arm matrix at 2400 steps, frequency-aware book
-   pruning, LM-optimal C sweep, wider scale ladder. Tokenizer
-   ecosystem bridges (GGUF/llama.cpp, vLLM) once the training side settles.
+   domain. All of that landed as v0.7.0 (item 14). Next: tokenizer
+   ecosystem bridges (GGUF/llama.cpp, vLLM) once the training side
+   settles, and the fast-lane/profiler levers (item 4) for raw speed.
 6. **~~Fractional C~~ done** — double C everywhere, snapshot v5.
 7. **~~Credit carry-over patcher~~ done** — `carry=True`; −15.1% patches
    at C=20, mean rate → C exactly, streaming bit-exact.
@@ -336,11 +356,17 @@ paths to raw speed.
     next workflow-scoped push after a scope-blocked first attempt;
     CHANGELOG documents it).
     Plan: `docs/PLAN_v0.6.md`.
-14. **The scale ladder (v0.7, planned)** — LM-side scale is the one open
-    roadmap item: 4 arms × 4 rungs (600→4800 steps) on the twin-study
-    protocol, one provenance-enveloped record, the gap-vs-steps trend
-    published either way it lands; frequency-aware book pruning (opt-in,
-    default bit-exact) and the LM-optimal C sweep alongside. Plan:
+14. **~~The scale ladder~~ done (v0.7.0)** — the trend the s2400 probe
+    could only point at is now a measured record: 4 arms × 4 rungs
+    (600→4800 steps) on the frozen twin-study protocol, one
+    provenance-enveloped record (`research/twin_ladder.json`), the
+    gap-vs-log-steps slope published with both interpretations
+    pre-registered before any rung above 600 was trained (table above;
+    narrative in `docs/twin_study.md`). The engine feature the
+    hypothesis points at shipped alongside: frequency-aware book pruning
+    (`prune=True`, opt-in, default path byte-identical, snapshot v7) with
+    its own LM measurement (`research/book_pruning.json`), plus the
+    LM-optimal C sweep (`research/lm_c_sweep.json`). Plan:
     `docs/PLAN_v0.7.md`.
 
 ## Layout
@@ -373,7 +399,13 @@ docs/
   container.md       container format spec (draft v0.1)
 research/
   twin_study.py      the twin-study harness (protocol in the docstring)
+  run_ladder.py      the scale-ladder runner (resumable, per-run records)
+  run_c_sweep.py     the LM-optimal C sweep runner
+  run_prune_lm.py    the book-pruning LM measurement runner
   twin_*.json        committed result records (seed-42 run + scale probe)
+  twin_ladder.json   the scale-ladder record (rewritten per completed run)
+  lm_c_sweep.json    the C-sweep record
+  book_pruning.json  the pruning LM measurement record
   scale_mix15.8MB.json   efficiency-vs-scale record behind the table above
 ```
 

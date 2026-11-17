@@ -48,6 +48,18 @@ DOMAINS = ["en", "hr", "zh", "code"]
 C = 10                      # ratec arm patch budget (matches twin_study)
 LEN_CAP = 9                 # len_idx <= 9 by the V=9472 table layout
 
+# the shipped mix partition (v0.5.0 protocol, bound by the bpe streams'
+# byte sums and verified: the hr/zh/code slices equal {d}_train.txt
+# byte-for-byte; the en slice is the mix's first 6,490,411 bytes — the
+# same bytes every arm consumes, so the partition itself is the protocol)
+MIX_OFFSETS = [0, 6_490_411, 8_992_506, 11_503_730, 15_811_609]
+TRAIN_BYTES = MIX_OFFSETS[-1]
+VAL_BYTES = 659_473
+FEED_CHUNK = 4 << 20        # chunked feed keeps patches open across
+                            # chunks (feed(a);feed(b) == feed(a+b) exactly),
+                            # so tokenization is one-shot-equivalent while
+                            # span lists stay per-chunk (bounded memory)
+
 
 def sha(b):
     return hashlib.sha256(b).hexdigest()
@@ -71,10 +83,137 @@ def stream_bytes(raw: bytes):
     return ids, lens
 
 
+def _spans_to_arrays(spans):
+    if not spans:
+        return (np.zeros(0, dtype=np.int32), np.zeros(0, dtype=np.int32))
+    ids = np.fromiter((s[2] for s in spans), dtype=np.int32, count=len(spans))
+    lens = np.fromiter((s[1] - s[0] for s in spans), dtype=np.int32,
+                       count=len(spans))
+    return ids, lens
+
+
+def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
+    """v0.7.0 sweep regime (PLAN_v0.7 P3 + P2 measurement): ONE engine
+    tokenizes the whole corpus — the train mix (chunked feed, split at the
+    shipped MIX_OFFSETS, straddling patches assigned to the slice their
+    start byte falls in) and then each domain's val file WITHOUT reset, so
+    val ids live in the same book as train ids (the shipped streams'
+    proven design). Ids are the engine's dense book ids; lens are TRUE
+    byte lengths (uncapped — byte-weighted eval consumes them as bytes;
+    the model's length field clamps separately via twin_study
+    --lens_lidx). With prune=True the book churns at prune boundaries and
+    ids renumber — the bounded-vocabulary mechanism under measurement.
+
+    Outputs {prefix}_dom_{split}_{ids,lens}.npy with
+    prefix = ratec_c{c}[_pr], bound by sha256 in
+    streams_manifest_c{c}[_pr].json."""
+    prefix = f"ratec_c{c}" + ("_pr" if prune else "")
+    mix_path = os.path.join(DATA, "_train_mix.txt")
+    mix = open(mix_path, "rb").read()
+    assert len(mix) == TRAIN_BYTES and MIX_OFFSETS[-1] == TRAIN_BYTES
+    eng = ratec.RateC(c=c, prune=prune, prune_after=prune_after,
+                      prune_min=prune_min)
+    stats = {"engine": {"c": c, "prune": prune,
+                        "prune_after": prune_after if prune else 0,
+                        "prune_min": prune_min if prune else 0}}
+    # ---- train: chunked feed over the mix, sliced by MIX_OFFSETS
+    per_dom = [[] for _ in DOMAINS]           # lists of (ids, lens) chunks
+    off = 0                                   # bytes consumed so far
+    for k in range(0, len(mix), FEED_CHUNK):
+        spans = eng.feed(mix[k:k + FEED_CHUNK])
+        ids, lens = _spans_to_arrays(spans)
+        # assign each token to the slice its START byte falls in; token
+        # starts are contiguous (each patch starts where the previous
+        # ends) and feed() reports absolute stream offsets
+        if len(ids):
+            first_start = spans[0][0]
+            cum = np.concatenate(([first_start],
+                                  first_start + np.cumsum(lens.astype(np.int64))[:-1]))
+        else:
+            cum = np.zeros(0, dtype=np.int64)
+        slice_idx = np.searchsorted(np.array(MIX_OFFSETS[1:-1]), cum,
+                                    side="right")
+        for si in range(4):
+            m = slice_idx == si
+            if m.any():
+                per_dom[si].append((ids[m], lens[m]))
+        off += len(mix[k:k + FEED_CHUNK])
+    spans = eng.flush()
+    ids, lens = _spans_to_arrays(spans)
+    if len(ids):
+        cum = np.concatenate(([spans[0][0]],
+                              spans[0][0] + np.cumsum(lens.astype(np.int64))[:-1]))
+        slice_idx = np.searchsorted(np.array(MIX_OFFSETS[1:-1]), cum,
+                                    side="right")
+        for si in range(4):
+            m = slice_idx == si
+            if m.any():
+                per_dom[si].append((ids[m], lens[m]))
+    stats["engine"]["book_size_after_train"] = eng.book_size
+    stats["engine"]["n_pruned_after_train"] = eng.n_pruned
+    # ---- val: same engine (same book), one domain at a time
+    man = {"protocol": {
+        "what": f"sweep/prune streams at C={c} ({'pruned' if prune else 'unpruned'} book)",
+        "regime": "single engine over mix (chunked feed) then per-domain "
+                  "val without reset; dense book ids; TRUE byte lens; "
+                  "train slices = shipped MIX_OFFSETS partition; model "
+                  "side consumes them with twin_study --lens_lidx",
+        "mix_offsets": MIX_OFFSETS,
+        "note": ("ids are engine book ids (dense, renumbered at prune "
+                 "boundaries when pruned); unlike the shipped v0.5.0-era "
+                 "packed-id streams there is no length-slab id structure"),
+    }}
+    man["protocol"].update(record_envelope(
+        inputs={"_train_mix.txt": os.path.relpath(mix_path, _ROOT),
+                **{f"{d}_val.txt": f"data/{d}_val.txt" for d in DOMAINS}},
+        deps=("numpy",)))
+    man["files"] = {}
+    tot_bytes = 0
+    for di, dom in enumerate(DOMAINS):
+        ids = np.concatenate([a for a, _ in per_dom[di]]) \
+            if per_dom[di] else np.zeros(0, dtype=np.int32)
+        lens = np.concatenate([l for _, l in per_dom[di]]) \
+            if per_dom[di] else np.zeros(0, dtype=np.int32)
+        tot_bytes += int(lens.sum())
+        val = open(os.path.join(DATA, f"{dom}_val.txt"), "rb").read()
+        vspans = eng.encode_to_spans(val)
+        v_ids, v_lens = _spans_to_arrays(vspans)
+        tot_bytes += int(v_lens.sum())
+        for tag, arr in ((f"{prefix}_{dom}_train_ids", ids),
+                         (f"{prefix}_{dom}_train_lens", lens),
+                         (f"{prefix}_{dom}_val_ids", v_ids),
+                         (f"{prefix}_{dom}_val_lens", v_lens)):
+            out = os.path.join(RUNS, f"{tag}.npy")
+            np.save(out, arr)
+            man["files"][f"{tag}.npy"] = {"sha256": sha256_file(out),
+                                          "len": int(len(arr))}
+        print(f"  {prefix}/{dom}: train {len(ids)} tok / {int(lens.sum())} B "
+              f"| val {len(v_ids)} tok / {int(v_lens.sum())} B", flush=True)
+    assert tot_bytes == TRAIN_BYTES + VAL_BYTES, tot_bytes
+    stats["engine"]["book_size_final"] = eng.book_size
+    stats["engine"]["n_pruned_final"] = eng.n_pruned
+    man["engine_stats"] = stats["engine"]
+    out_path = os.path.join(RUNS, f"streams_manifest_c{c}{'_pr' if prune else ''}.json")
+    with open(out_path, "w") as f:
+        json.dump(man, f, indent=1)
+    print(f"wrote {out_path} ({len(man['files'])} files bound)", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--kinds", default="ratec,bytes")
+    ap.add_argument("--c", type=int, default=None,
+                    help="sweep regime: build single-engine streams at this "
+                         "patch budget (v0.7.0); with --prune the book is "
+                         "pruned every --prune-after bytes")
+    ap.add_argument("--prune", action="store_true")
+    ap.add_argument("--prune-after", type=int, default=1 << 20)
+    ap.add_argument("--prune-min", type=int, default=2)
     args = ap.parse_args()
+
+    if args.c is not None:
+        regime_ratec_c(args.c, args.prune, args.prune_after, args.prune_min)
+        return
     kinds = args.kinds.split(",")
 
     train_path = os.path.join(DATA, "_train_mix.txt")

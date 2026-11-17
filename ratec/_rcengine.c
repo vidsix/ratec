@@ -61,7 +61,7 @@ static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
 /* Version is single-sourced from pyproject.toml (setup.py injects
  * -DRC_VERSION); the local define is the fallback for standalone builds. */
 #ifndef RC_VERSION
-#define RC_VERSION "0.6.0"
+#define RC_VERSION "0.7.0"
 #endif
 #define PF_DEFAULT 2
 #define MAP_CAPBITS_DEFAULT 22
@@ -199,6 +199,9 @@ static inline __attribute__((always_inline)) int ov_push(OutVec *v, uint32_t x) 
 typedef struct {
     uint8_t  *arena; size_t alen, acap;
     uint32_t *off, *ln;          /* by id */
+    uint32_t *cnt;               /* by id: occurrences since last prune
+                                    (v0.7 prune mode; maintained always,
+                                    consumed only when prune_after > 0) */
     size_t n, cap;               /* number of entries */
     uint64_t *hk;                /* slot hash */
     uint32_t *hv;                /* slot value = id+1, 0 = empty */
@@ -245,8 +248,10 @@ static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
     uint64_t i = h & b->mask;
     while (b->hv[i]) {
         uint32_t id = b->hv[i] - 1;
-        if (b->ln[id] == len && memcmp(b->arena + b->off[id], p, len) == 0)
+        if (b->ln[id] == len && memcmp(b->arena + b->off[id], p, len) == 0) {
+            if (b->cnt && b->cnt[id] < 0xFFFFFFFFu) b->cnt[id]++;
             return id;
+        }
         i = (i + 1) & b->mask;
     }
     if (b->n == b->cap) {
@@ -256,7 +261,11 @@ static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
         b->off = no;
         uint32_t *nl = (uint32_t *)realloc(b->ln, nc * 4);
         if (!nl) { b->err = 1; return ID_NONE; }
-        b->ln = nl; b->cap = nc;
+        b->ln = nl;
+        uint32_t *ncn = (uint32_t *)realloc(b->cnt, nc * 4);
+        if (!ncn) { b->err = 1; return ID_NONE; }
+        b->cnt = ncn;
+        b->cap = nc;
     }
     if (b->alen + len > b->acap) {
         size_t nc = b->acap ? b->acap * 2 : 4096;
@@ -271,8 +280,51 @@ static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
     b->alen += len;
     b->hv[i] = (uint32_t)(b->n + 1);
     b->hk[i] = h;
+    if (b->cnt) b->cnt[b->n] = 1;
     b->n++;
     return (uint32_t)(b->n - 1);
+}
+
+/* book_prune: drop entries whose since-last-prune count is below minc
+ * (the v0.7 frequency-aware prune — singleton starvation remedy), then
+ * reset every survivor's window count. Survivors are compacted IN PLACE
+ * (write index <= read index) preserving first-seen order and renumbered
+ * dense 0..k-1; the hash is rebuilt. No allocation, so this cannot OOM.
+ * Returns entries removed, or -1 if the book is in an error state.
+ *
+ * Id semantics (documented, opt-in): ids emitted BEFORE a prune refer to
+ * the pre-prune numbering — decode_bytes rejects them via its bounds
+ * check once the book shrinks. Spans are unaffected (the patcher is
+ * book-independent); only id assignment churns at prune boundaries. */
+static int64_t book_prune(Book *b, uint32_t minc) {
+    if (b->err) return -1;
+    if (!b->cnt) return 0;                    /* no counts: nothing to do */
+    size_t w = 0;                             /* survivor write index */
+    size_t wpos = 0;                          /* survivor write position */
+    for (size_t id = 0; id < b->n; id++) {
+        if (b->cnt[id] >= minc) {
+            if (wpos != b->off[id])           /* shift down over the gap */
+                memmove(b->arena + wpos, b->arena + b->off[id], b->ln[id]);
+            b->off[w] = (uint32_t)wpos;
+            b->ln[w] = b->ln[id];
+            w++;
+            wpos += b->ln[id];
+        }
+    }
+    int64_t removed = (int64_t)b->n - (int64_t)w;
+    b->n = w;
+    b->alen = wpos;
+    memset(b->cnt, 0, b->n * 4);              /* window counts restart */
+    /* rebuild the hash over the survivors */
+    memset(b->hv, 0, ((size_t)b->mask + 1) * 4);
+    for (size_t id = 0; id < b->n; id++) {
+        uint64_t h_ = fnv1a64(b->arena + b->off[id], b->ln[id]);
+        uint64_t j = h_ & b->mask;
+        while (b->hv[j]) j = (j + 1) & b->mask;
+        b->hv[j] = (uint32_t)(id + 1);
+        b->hk[j] = h_;
+    }
+    return removed;
 }
 
 /* -------------------------------------------------------------- GrowBuf */
@@ -335,6 +387,16 @@ typedef struct {
 
     uint64_t nseen;              /* absolute bytes processed              */
     uint64_t n_forced, n_patches;
+    uint64_t n_pruned;           /* cumulative book entries removed (v0.7) */
+
+    /* v0.7 frequency-aware book pruning (opt-in; 0 = off, default). At
+     * every close whose end offset crosses a multiple of prune_after,
+     * book entries whose since-last-prune count < prune_min are dropped
+     * and ids renumbered dense. prune_after == 0 keeps the byte-exact
+     * default path (no book state changes at all). */
+    uint64_t prune_after;        /* bytes between prunes                  */
+    uint32_t prune_min;          /* since-last-prune count threshold      */
+    uint64_t next_prune_at;      /* next absolute offset to prune at      */
 
     /* reusable emit vectors: fed by feed/flush/surprise, reset (n=0) per
      * call, capacity retained so steady-state calls never malloc/free */
@@ -344,17 +406,22 @@ typedef struct {
 } RcCore;
 
 static RcCore *core_new(double C, int store_book, int pf, int prebits,
-                        int map_capbits, int fast, int pmode);
+                        int map_capbits, int fast, int pmode,
+                        uint64_t prune_after, uint32_t prune_min);
 static void core_free(RcCore *e);
 
 static RcCore *core_new(double C, int store_book, int pf, int prebits,
-                        int map_capbits, int fast, int pmode) {
+                        int map_capbits, int fast, int pmode,
+                        uint64_t prune_after, uint32_t prune_min) {
     RcCore *e = (RcCore *)calloc(1, sizeof(RcCore));
     if (!e) return NULL;
     e->C = C; e->store_book = store_book ? 1 : 0;
     e->pf = pf; e->map_capbits = (uint64_t)map_capbits;
     e->fast = fast ? 1 : 0;
     e->pmode = pmode ? 1 : 0; e->carry = 0.0;
+    e->prune_after = prune_after;
+    e->prune_min = prune_min ? prune_min : 1;
+    e->next_prune_at = prune_after;   /* first boundary; 0 when disabled */
     e->cnt1 = (uint32_t *)calloc(256 * 256, 4);
     e->tot1 = (uint32_t *)calloc(256, 4);
     e->tot2 = (uint32_t *)calloc(65536, 4);
@@ -377,6 +444,7 @@ static void core_free(RcCore *e) {
     free(e->cmap.e); free(e->cmap.dirty);
     free(e->obuf);
     free(e->book.arena); free(e->book.off); free(e->book.ln);
+    free(e->book.cnt);
     free(e->book.hk); free(e->book.hv);
     ov_free(&e->ros); ov_free(&e->roe); ov_free(&e->roi);
     free(e);
@@ -424,6 +492,8 @@ static void core_reset_keep(RcCore *e) {
     e->patch_open = 0; e->open_start = 0; e->open_len = 0;
     e->cs = 0.0; e->lim = 0.0; e->carry = 0.0;
     e->nseen = 0; e->n_forced = 0; e->n_patches = 0;
+    e->n_pruned = 0;
+    e->next_prune_at = e->prune_after;   /* boundary schedule restarts */
     e->poisoned = 0;
     e->book.n = 0; e->book.alen = 0;
     if (!e->book.hk || !e->book.hv) {
@@ -533,6 +603,21 @@ emit_patch(OutVec *ovs, OutVec *ove, OutVec *ovi, int store_book, Book *bk,
     if (ove && ov_push(ove, (uint32_t)en) < 0) return -1;
     if (ovi && ov_push(ovi, id_) < 0) return -1;
     (*npatch)++;
+    return 0;
+}
+
+/* prune check after a patch close: fire when the patch end crosses the
+ * next prune boundary. Boundaries are absolute stream offsets, so the
+ * prune sequence is identical for chunked and one-shot ingestion (the
+ * same closes happen at the same offsets). Multiple boundaries crossed
+ * by one long patch fire a single prune and advance the schedule. */
+static int maybe_prune(RcCore *e, uint64_t abs_end) {
+    if (!e->store_book || !e->prune_after || abs_end < e->next_prune_at)
+        return 0;
+    while (e->next_prune_at <= abs_end) e->next_prune_at += e->prune_after;
+    int64_t rem = book_prune(&e->book, e->prune_min);
+    if (rem < 0) return -1;
+    e->n_pruned += (uint64_t)rem;
     return 0;
 }
 
@@ -661,6 +746,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                                    open_start, pos0 + i + 1, &b, 1, &npatch);
                     if (erc) { rc = erc; goto done; }
                 }
+                if (maybe_prune(e, pos0 + i + 1)) { rc = -1; goto done; }
                 cs = cnext; patch_open = 0; i++;
                 if (CAR) carry = 0.0;            /* forced escape burns carry */
             } else {                             /* close, then byte i */
@@ -668,6 +754,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                                       open_start, pos0 + i, obuf, open_len,
                                       &npatch);
                 if (erc_) { rc = erc_; goto done; }
+                if (maybe_prune(e, pos0 + i)) { rc = -1; goto done; }
                 patch_open = 0; open_len = 0;
                 if (CAR) {                       /* deposit unused budget */
                     const double waste = lim - cs;
@@ -688,6 +775,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                                                    pos0 + i + 1, &b, 1, &npatch);
                         if (erc) { rc = erc; goto done; }
                     }
+                    if (maybe_prune(e, pos0 + i + 1)) { rc = -1; goto done; }
                     cs = cnext; patch_open = 0; i++;
                     if (CAR) carry = 0.0;        /* forced escape burns carry */
                 }
@@ -749,6 +837,7 @@ static int core_flush(RcCore *e, OutVec *ovs, OutVec *ove, OutVec *ovi) {
     if (ove && ov_push(ove, (uint32_t)e->nseen) < 0) return -1;
     if (ovi && ov_push(ovi, id_) < 0) return -1;
     e->n_patches++;
+    if (maybe_prune(e, e->nseen)) return -1;
     if (e->pmode) {                        /* deposit unused budget */
         const double waste = e->lim - e->cs;
         e->carry = waste < 0.0 ? 0.0
@@ -824,9 +913,18 @@ static int patch_from_sur_carry_core(const float *sur, size_t n, double C,
  *           dropped rows with all 256 counts nonzero) + map_capbits is
  *           serialized (a tuned engine used to restore as the default and
  *           could hit map exhaustion later). Byte layout is otherwise the
- *           v5 layout. load reads v2..v6. */
+ *           v5 layout. load reads v2..v6.
+ *   v7      v0.7.0: prune-mode engines only — v6 layout + trailing prune
+ *           section {prune_after u64, prune_min u32, next_prune_at u64,
+ *           n_pruned u64, book cnt[] u32 each}. Written when and only
+ *           when prune_after > 0, so non-prune snapshots stay byte-
+ *           identical v6. v2..v6 readers reject v7 cleanly (version
+ *           check); the strict trailing-garbage check is kept, which is
+ *           why the section rides on a version bump rather than trailing
+ *           on v6. load reads v2..v7. */
 static int save_core(RcCore *e, GrowBuf *g) {
-    uint32_t magic = RCST_MAGIC, ver = 6;
+    uint32_t magic = RCST_MAGIC;
+    uint32_t ver = e->prune_after ? 7 : 6;
     uint32_t sb = (uint32_t)e->store_book, pf = (uint32_t)e->pf;
     uint32_t fz = (uint32_t)e->fast;
     uint32_t poisoned = 0;
@@ -896,6 +994,14 @@ static int save_core(RcCore *e, GrowBuf *g) {
             if (gb_put(g, &e->book.off[id], 4) || gb_put(g, &e->book.ln[id], 4))
                 return -1;
     }
+    /* v7 prune section (prune-mode engines only) */
+    if (e->prune_after) {
+        if (gb_u64(g, &e->prune_after) || gb_u32(g, &e->prune_min) ||
+            gb_u64(g, &e->next_prune_at) || gb_u64(g, &e->n_pruned))
+            return -1;
+        for (size_t id = 0; e->store_book && id < e->book.n; id++)
+            if (gb_put(g, &e->book.cnt[id], 4)) return -1;
+    }
     return g->err ? -1 : 0;
 }
 
@@ -905,8 +1011,9 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     double C = 20.0, carry = 0.0;
     uint8_t pmode = 0, mcb = (uint8_t)MAP_CAPBITS_DEFAULT;
     if (rd_u32(&r, &magic) || rd_u32(&r, &ver)) return NULL;
-    if (ver == 6) {                  /* v6: v5 + serialized map_capbits,
-                                      * u16 per-row nonzero counter */
+    if (ver == 6 || ver == 7) {      /* v6: v5 + serialized map_capbits,
+                                      * u16 per-row nonzero counter;
+                                      * v7: v6 + trailing prune section */
         if (rd_f64(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
             rd_u32(&r, &fz) || rd_u32(&r, &poisoned) ||
             rd_u8(&r, &pmode) || rd_u8(&r, &mcb) || rd_f64(&r, &carry))
@@ -923,7 +1030,7 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
         C = (double)C32;
     }
-    if (magic != RCST_MAGIC || ver < 2 || ver > 6) return NULL;
+    if (magic != RCST_MAGIC || ver < 2 || ver > 7) return NULL;
     /* header sanity (P1-6): reject absurd/NaN tuning and flag fields before
      * they can reach the engine (NaN already fails the range compares) */
     if (sb > 1 || pf > 4 || fz > 1 || poisoned > 1 || pmode > 1) return NULL;
@@ -931,7 +1038,7 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
     if (!(C >= 1.0 && C <= 64.0)) return NULL;
     if (!(carry >= 0.0 && carry <= C)) return NULL;   /* finite + in range */
     RcCore *e = core_new(C, (int)sb, (int)pf, 16, (int)mcb,
-                         (int)fz, (int)pmode);
+                         (int)fz, (int)pmode, 0, 1);
     if (!e) return NULL;
     e->carry = carry;
     if (rd_u64(&r, &e->nseen) || rd_u64(&r, &e->n_forced) ||
@@ -1075,7 +1182,7 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
             e->book.alen = e->book.acap = alen;
         }
         if (!e->book.off || e->book.cap < bn) {
-            /* grow off/ln arrays to fit bn entries */
+            /* grow off/ln/cnt arrays to fit bn entries */
             size_t nc = 256;
             while (nc < bn) nc *= 2;
             uint32_t *no = (uint32_t *)realloc(e->book.off, nc * 4);
@@ -1083,7 +1190,11 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
             e->book.off = no;
             uint32_t *nl = (uint32_t *)realloc(e->book.ln, nc * 4);
             if (!nl) goto fail;
-            e->book.ln = nl; e->book.cap = nc;
+            e->book.ln = nl;
+            uint32_t *ncn = (uint32_t *)realloc(e->book.cnt, nc * 4);
+            if (!ncn) goto fail;
+            e->book.cnt = ncn;
+            e->book.cap = nc;
         }
         for (uint64_t id = 0; id < bn; id++) {
             uint32_t off, ln;
@@ -1094,6 +1205,8 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
                 goto fail;
             e->book.off[id] = off; e->book.ln[id] = ln;
         }
+        if (e->book.cnt && ver < 7)
+            memset(e->book.cnt, 0, (size_t)bn * 4);   /* no count history */
         e->book.n = bn;
         /* rebuild hash table */
         for (uint64_t id = 0; id < bn; id++) {
@@ -1101,6 +1214,25 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
                                  e->book.ln[id]) & e->book.mask;
             while (e->book.hv[j]) j = (j + 1) & e->book.mask;
             e->book.hv[j] = (uint32_t)(id + 1);
+        }
+    }
+    /* v7 prune section (prune-mode engines only) */
+    if (ver == 7) {
+        uint64_t pa = 0, npa = 0, npr = 0;
+        uint32_t pmin = 0;
+        if (rd_u64(&r, &pa) || rd_u32(&r, &pmin) ||
+            rd_u64(&r, &npa) || rd_u64(&r, &npr)) goto fail;
+        /* header sanity for the prune schedule: the next boundary lies
+         * within one interval past the last close (nseen is only ahead of
+         * it when an open patch spans the boundary) */
+        if (pa < 1 || pa > (1ull << 48) || pmin < 1) goto fail;
+        if (npa < 1 || npa > e->nseen + pa) goto fail;
+        if (npr > (1ull << 48)) goto fail;
+        e->prune_after = pa; e->prune_min = pmin;
+        e->next_prune_at = npa; e->n_pruned = npr;
+        if (e->store_book) {
+            for (uint64_t id = 0; id < e->book.n; id++)
+                if (rd_u32(&r, &e->book.cnt[id])) goto fail;
         }
     }
     if (r.at != r.n) goto fail;                    /* trailing garbage */
@@ -1146,11 +1278,15 @@ static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
     int store_book = 1, pf = -1, prebits = 16;
     int map_capbits = MAP_CAPBITS_DEFAULT;
     int fast = 0, carry = 0;
+    unsigned long long prune_after = 0;
+    int prune_min = 2;
     static char *kwlist[] = {"c", "store_book", "pf", "prebits",
-                             "map_capbits", "exact", "carry", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|dpiiiii", kwlist,
+                             "map_capbits", "exact", "carry",
+                             "prune_after", "prune_min", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|dpiiiiiKi", kwlist,
                                      &C, &store_book, &pf, &prebits,
-                                     &map_capbits, &fast, &carry))
+                                     &map_capbits, &fast, &carry,
+                                     &prune_after, &prune_min))
         return NULL;
     fast = fast ? 0 : 1;   /* kwarg is `exact` (default true); fast = !exact */
     if (!(C >= 1.0 && C <= 64.0)) {
@@ -1160,6 +1296,14 @@ static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
     if (pf < -1 || pf > 4) {
         PyErr_SetString(PyExc_ValueError, "pf must be -1..4"); return NULL;
     }
+    if (prune_after > (1ull << 48)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "prune_after must be 0 (off) .. 2**48"); return NULL;
+    }
+    if (prune_min < 1 || prune_min > (1 << 30)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "prune_min must be 1 .. 2**30"); return NULL;
+    }
     if (prebits < 4) prebits = 4;
     if (prebits > 24) prebits = 24;
     if (map_capbits < 8) map_capbits = 8;
@@ -1168,7 +1312,8 @@ static PyObject *Engine_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
     if (!self) return NULL;
     self->busy = 0;
     self->core = core_new(C, store_book, pf < 0 ? PF_DEFAULT : pf,
-                          prebits, map_capbits, fast, carry ? 1 : 0);
+                          prebits, map_capbits, fast, carry ? 1 : 0,
+                          (uint64_t)prune_after, (uint32_t)prune_min);
     if (!self->core) { Py_DECREF(self); return PyErr_NoMemory(); }
     return (PyObject *)self;
 }
@@ -1430,6 +1575,15 @@ static PyObject *gs_n_patches(EngineObj *self, void *c) {
 static PyObject *gs_n_forced(EngineObj *self, void *c) {
     return PyLong_FromUnsignedLongLong(self->core->n_forced);
 }
+static PyObject *gs_n_pruned(EngineObj *self, void *c) {
+    return PyLong_FromUnsignedLongLong(self->core->n_pruned);
+}
+static PyObject *gs_prune_after(EngineObj *self, void *c) {
+    return PyLong_FromUnsignedLongLong(self->core->prune_after);
+}
+static PyObject *gs_prune_min(EngineObj *self, void *c) {
+    return PyLong_FromUnsignedLong(self->core->prune_min);
+}
 static PyObject *gs_repr(EngineObj *self) {
     char cbuf[32];
     snprintf(cbuf, sizeof cbuf, "%g", self->core->C);
@@ -1471,6 +1625,9 @@ static PyGetSetDef Engine_getset[] = {
     {"bytes_seen", (getter)gs_bytes_seen, NULL, "bytes processed", NULL},
     {"n_patches",  (getter)gs_n_patches,  NULL, "patches emitted", NULL},
     {"n_forced",   (getter)gs_n_forced,   NULL, "forced escapes", NULL},
+    {"n_pruned",   (getter)gs_n_pruned,   NULL, "book entries removed by pruning", NULL},
+    {"prune_after",(getter)gs_prune_after,NULL, "prune interval in bytes (0 = off)", NULL},
+    {"prune_min",  (getter)gs_prune_min,  NULL, "since-last-prune count threshold", NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 static PyTypeObject Engine_Type = {
@@ -1501,7 +1658,7 @@ static void *bworker(void *argp) {
         if (idx >= p->njobs) break;
         BJob *j = &p->jobs[idx];
         RcCore *core = core_new(j->c, 0, PF_DEFAULT, j->prebits,
-                                MAP_CAPBITS_DEFAULT, j->fast, j->carry);
+                                MAP_CAPBITS_DEFAULT, j->fast, j->carry, 0, 1);
         if (!core) { j->err = 1; continue; }
         OutVec ov; ov_init(&ov);
         int rc = core_run(core, j->data, j->n, 1, NULL, &ov, NULL, NULL);
@@ -1720,7 +1877,7 @@ int main(int argc, char **argv) {
     int fastarg = (argc > 6) ? atoi(argv[6]) : 0;
     double inv_dummy = 0; (void)inv_dummy;
     for (int r = -1; r < reps; r++) {
-        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT, fastarg, 0);
+        RcCore *core = core_new(C, 0, pf, prebits, MAP_CAPBITS_DEFAULT, fastarg, 0, 0, 1);
         core_reserve(core, (size_t)n);
         OutVec ov; ov_init(&ov);
         struct timespec ts0, ts1;

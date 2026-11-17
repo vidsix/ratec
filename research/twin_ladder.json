@@ -1,0 +1,282 @@
+{
+ "protocol": {
+  "what": "LM-side scale ladder: 4 arms x 4 rungs, one frozen protocol (PLAN_v0.7 P1)",
+  "arms": [
+   "bpe",
+   "ratec_direct",
+   "ratec",
+   "bytes"
+  ],
+  "rungs_steps": [
+   600,
+   1200,
+   2400,
+   4800
+  ],
+  "frozen": {
+   "d": 96,
+   "layers": 3,
+   "heads": 4,
+   "ctx": 256,
+   "batch": 16,
+   "lr": 0.0003,
+   "seed": 42,
+   "train_bytes": 15811609,
+   "val_bytes": 659473
+  },
+  "rung_600_source": "the committed research/twin_{arm}.json records, asserted protocol-identical",
+  "rung_>=1200": "fresh runs (OneCycle recomputed per rung; no warm-start across rungs) via twin_study.py --tag _l{rung}, resumable per run",
+  "eval": "full-coverage byte-weighted BPB, identical held-out bytes for all arms (twin_study.py eval_full)",
+  "interpretations_pre_registered": [
+   "if the tokenization gap (bpe - ratec arm) keeps narrowing with an approximately constant log-slope, that IS the 'more efficient with scale' claim, stated with its measured slope and range;",
+   "if the gap plateaus, the doc states where it plateaus; either way the record is the contribution. Written before any rung above 600 was trained (PLAN_v0.7.md P1)."
+  ],
+  "engine_note": "training runs executed by the engine binary tagged 0.6.0 (the 0.7.0 bump changes the version string and adds the opt-in prune feature, which the ladder does not use); ratec_version in the envelope reflects the runner process's import at rewrite",
+  "ratec_version": "0.6.0",
+  "deps": {
+   "numpy": "2.1.3",
+   "torch": "2.15.0+cpu"
+  },
+  "git_rev": "fd9341b",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-17T16:27:45+00:00",
+  "inputs": {
+   "bpe_mix_en_train_ids.npy": {
+    "sha256": "212d3026f239737dc87cbd3f92724a8bd0e811cf619e4b052397a8ff54d74b8d",
+    "path": "/home/z/my-project/runs/bpe_mix_en_train_ids.npy",
+    "bytes": 3791256
+   },
+   "bpe_mix_en_train_lens.npy": {
+    "sha256": "0c9de4e2ac3ff449c5bc8aab15414807398a3e59e8fb5c98ffd152f6aeb046a6",
+    "path": "/home/z/my-project/runs/bpe_mix_en_train_lens.npy",
+    "bytes": 1895692
+   },
+   "bpe_mix_en_val_ids.npy": {
+    "sha256": "86ba1a21bc1713ea19a2e67d71c5d153b1f9b5c8b047486d4a182de655091315",
+    "path": "/home/z/my-project/runs/bpe_mix_en_val_ids.npy",
+    "bytes": 161936
+   },
+   "bpe_mix_en_val_lens.npy": {
+    "sha256": "2f2e9345c9aa300c16d67a24722c22234dd0d8d4e457be67ade32addeb7b8be5",
+    "path": "/home/z/my-project/runs/bpe_mix_en_val_lens.npy",
+    "bytes": 81032
+   },
+   "bpe_mix_hr_train_ids.npy": {
+    "sha256": "97a15fa539d69a0b04053f784f2219ea325afb049b0fdf503024ed51e273b5ed",
+    "path": "/home/z/my-project/runs/bpe_mix_hr_train_ids.npy",
+    "bytes": 1680176
+   },
+   "bpe_mix_hr_train_lens.npy": {
+    "sha256": "03fa83255fa3c740e9872d35741ba00563cebccd2fd6548a4106583fa227129b",
+    "path": "/home/z/my-project/runs/bpe_mix_hr_train_lens.npy",
+    "bytes": 840152
+   },
+   "bpe_mix_hr_val_ids.npy": {
+    "sha256": "9f5fc15003952cca023a8e1aa158768b24a555090f763a8d95bb2f15e8e68641",
+    "path": "/home/z/my-project/runs/bpe_mix_hr_val_ids.npy",
+    "bytes": 68798
+   },
+   "bpe_mix_hr_val_lens.npy": {
+    "sha256": "bcfe7c72f53d82861da994757cac020c0b942061105d8d69b605268b78c30aca",
+    "path": "/home/z/my-project/runs/bpe_mix_hr_val_lens.npy",
+    "bytes": 34463
+   },
+   "bpe_mix_zh_train_ids.npy": {
+    "sha256": "e508a59d8611f5de7555cafbc49dc852d5aa2c480525c35e5a2c08ce1b1c2489",
+    "path": "/home/z/my-project/runs/bpe_mix_zh_train_ids.npy",
+    "bytes": 1603950
+   },
+   "bpe_mix_zh_train_lens.npy": {
+    "sha256": "9381a827115c7165652883911674cb96f474e99f7fe1be32d17900e03d5ef055",
+    "path": "/home/z/my-project/runs/bpe_mix_zh_train_lens.npy",
+    "bytes": 802039
+   },
+   "bpe_mix_zh_val_ids.npy": {
+    "sha256": "3a51846690c49432739f69910fee7407f4ae2b40a9ec1bfa888a8010558de994",
+    "path": "/home/z/my-project/runs/bpe_mix_zh_val_ids.npy",
+    "bytes": 66618
+   },
+   "bpe_mix_zh_val_lens.npy": {
+    "sha256": "9800700d13d8a7023df598e571395357d1fafe1f8af89f1e208b28ad0317b411",
+    "path": "/home/z/my-project/runs/bpe_mix_zh_val_lens.npy",
+    "bytes": 33373
+   },
+   "bpe_mix_code_train_ids.npy": {
+    "sha256": "2fadfe05de62b93ab3943bafbc8c42e4f85baee597830a1a156b3a4018763cc3",
+    "path": "/home/z/my-project/runs/bpe_mix_code_train_ids.npy",
+    "bytes": 2743150
+   },
+   "bpe_mix_code_train_lens.npy": {
+    "sha256": "cb592f40abbe136deda1562fe2a7f0560d7389b03e60f7dedddffed45151fcef",
+    "path": "/home/z/my-project/runs/bpe_mix_code_train_lens.npy",
+    "bytes": 1371639
+   },
+   "bpe_mix_code_val_ids.npy": {
+    "sha256": "490ff848f1ee99737f0c0c03b6ce86645d148e67df2e67d5726a1ed292d8665d",
+    "path": "/home/z/my-project/runs/bpe_mix_code_val_ids.npy",
+    "bytes": 137094
+   },
+   "bpe_mix_code_val_lens.npy": {
+    "sha256": "89b8c4bd7a51d002441bbd5d1c3dc84a25966468974a3a0c3ea6cc3bf8095a3d",
+    "path": "/home/z/my-project/runs/bpe_mix_code_val_lens.npy",
+    "bytes": 68611
+   },
+   "ratec_main_en_train_ids.npy": {
+    "sha256": "2d3958328f51298a74315a0d89b1b3c8bf40d822aac764eb59d2cedc865aa557",
+    "path": "/home/z/my-project/runs/ratec_main_en_train_ids.npy",
+    "bytes": 7909670
+   },
+   "ratec_main_en_train_lens.npy": {
+    "sha256": "ac9104202dca7bece59fd40bf6208d1b4c55ae703500d32f4c1544a2d1fc844c",
+    "path": "/home/z/my-project/runs/ratec_main_en_train_lens.npy",
+    "bytes": 3954899
+   },
+   "ratec_main_en_val_ids.npy": {
+    "sha256": "c00ee6d58a1b24b35b83399536cf7247bfdc56c58142d2266ef0d0148b75a9d0",
+    "path": "/home/z/my-project/runs/ratec_main_en_val_ids.npy",
+    "bytes": 337210
+   },
+   "ratec_main_en_val_lens.npy": {
+    "sha256": "1d11d9b20123c89581bb888b9a847fc4708712950859b424f64a288f7d540070",
+    "path": "/home/z/my-project/runs/ratec_main_en_val_lens.npy",
+    "bytes": 168669
+   },
+   "ratec_main_hr_train_ids.npy": {
+    "sha256": "a899cf20c1df74311e4a338fb4d7bc31e6aa8831bf1edb3bba5a98728ae0b473",
+    "path": "/home/z/my-project/runs/ratec_main_hr_train_ids.npy",
+    "bytes": 3585732
+   },
+   "ratec_main_hr_train_lens.npy": {
+    "sha256": "b0143e0c2f34cdd54a9164c3a6c78db47d4d24d1437f1bd75100e62dcb02f84b",
+    "path": "/home/z/my-project/runs/ratec_main_hr_train_lens.npy",
+    "bytes": 1792930
+   },
+   "ratec_main_hr_val_ids.npy": {
+    "sha256": "470bf868eb0e2b177e112eeb965fff2981c5b6599ba6ba025bbeaba6d04fec8e",
+    "path": "/home/z/my-project/runs/ratec_main_hr_val_ids.npy",
+    "bytes": 152790
+   },
+   "ratec_main_hr_val_lens.npy": {
+    "sha256": "6918433bf1c9d001008423a2f064198d52d3ac04b4d2a7a59bd40240abab105d",
+    "path": "/home/z/my-project/runs/ratec_main_hr_val_lens.npy",
+    "bytes": 76459
+   },
+   "ratec_main_zh_train_ids.npy": {
+    "sha256": "6a54bb69146c4c59d520054b2d3dd0ad1e9cd8751e8f16fb7765b00cf3f031fd",
+    "path": "/home/z/my-project/runs/ratec_main_zh_train_ids.npy",
+    "bytes": 4978758
+   },
+   "ratec_main_zh_train_lens.npy": {
+    "sha256": "bc4e9d03852f82a75c09a2ddd96519b547d6ac5432349da60258e6551a9db652",
+    "path": "/home/z/my-project/runs/ratec_main_zh_train_lens.npy",
+    "bytes": 2489443
+   },
+   "ratec_main_zh_val_ids.npy": {
+    "sha256": "074821e730dd0d7ce4a652cf506487f38a4dc2cc713130df4866d3a1ca10962e",
+    "path": "/home/z/my-project/runs/ratec_main_zh_val_ids.npy",
+    "bytes": 210248
+   },
+   "ratec_main_zh_val_lens.npy": {
+    "sha256": "a54e5e4fdfef3823fa249857a576e974b639555311f1b51ebce73ec582eee91a",
+    "path": "/home/z/my-project/runs/ratec_main_zh_val_lens.npy",
+    "bytes": 105188
+   },
+   "ratec_main_code_train_ids.npy": {
+    "sha256": "10a864279c751df05d4c6f1ef0fff873d89261c14cb8c5503d73267b8252a021",
+    "path": "/home/z/my-project/runs/ratec_main_code_train_ids.npy",
+    "bytes": 5415256
+   },
+   "ratec_main_code_train_lens.npy": {
+    "sha256": "04ee3514332a7c8d28febaedf54d86d9e3dbc5f66080817536c5426bab35f7ee",
+    "path": "/home/z/my-project/runs/ratec_main_code_train_lens.npy",
+    "bytes": 2707692
+   },
+   "ratec_main_code_val_ids.npy": {
+    "sha256": "5fdf9705e32e501043124f879891f54e1b42007029b7695da4c9924b1e070733",
+    "path": "/home/z/my-project/runs/ratec_main_code_val_ids.npy",
+    "bytes": 244586
+   },
+   "ratec_main_code_val_lens.npy": {
+    "sha256": "099c5bf3606f1e2e0be0d2a4bb04a591a89819cda12f7e2a857d04193ae244ee",
+    "path": "/home/z/my-project/runs/ratec_main_code_val_lens.npy",
+    "bytes": 122357
+   },
+   "bytes_train_mix": {
+    "sha256": "c655b89aefca25aafeb084bb1d695c4deacbf469f5e7a60cdd1ec3e647089457",
+    "path": "/home/z/my-project/data/_train_mix.txt",
+    "bytes": 15811609
+   }
+  }
+ },
+ "rungs": {
+  "600": {
+   "bpe": {
+    "final_bpb_overall": 3.1116900979595763,
+    "final_bpb_per_domain": {
+     "en": 2.7340181274675825,
+     "hr": 3.2190049505188045,
+     "zh": 3.3352124768182017,
+     "code": 3.4874135972801095
+    },
+    "params": 1269600,
+    "wall_sec": 295.9121685028076,
+    "source": "committed_600"
+   },
+   "ratec_direct": {
+    "final_bpb_overall": 4.7958353435220165,
+    "final_bpb_per_domain": {
+     "en": 4.561721490013166,
+     "hr": 4.867545978183066,
+     "zh": 5.285769259125739,
+     "code": 4.8198979585286965
+    },
+    "params": 1269600,
+    "wall_sec": 279.06133937835693,
+    "source": "committed_600"
+   },
+   "ratec": {
+    "final_bpb_overall": 4.815591679147973,
+    "final_bpb_per_domain": {
+     "en": 4.5450069173147,
+     "hr": 4.909815933900074,
+     "zh": 5.316357164882425,
+     "code": 4.875177302051341
+    },
+    "params": 1405248,
+    "wall_sec": 289.06532645225525,
+    "source": "committed_600"
+   },
+   "bytes": {
+    "final_bpb_overall": 4.146817515128131,
+    "final_bpb_per_domain": {
+     "en": 3.7028759125301725,
+     "hr": 4.055225056751577,
+     "zh": 5.036180092633589,
+     "code": 4.347904839571703
+    },
+    "params": 384864,
+    "wall_sec": 137.69077682495117,
+    "source": "committed_600"
+   }
+  }
+ },
+ "status": {
+  "rungs_complete": [],
+  "runs_complete": 0,
+  "runs_total": 16,
+  "updated_utc": "2026-11-17T16:27:41Z"
+ },
+ "gap_table": {
+  "600": {
+   "bpe_minus_ratec_direct": -1.6841,
+   "bpe_minus_ratec": -1.7039,
+   "bpe_minus_bytes": -1.0351
+  }
+ },
+ "slopes": {}
+}

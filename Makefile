@@ -8,6 +8,7 @@ test: build
 	$(PY) tests/test_ratec.py
 	$(PY) tests/test_v04.py
 	$(PY) tests/test_profiles.py
+	$(PY) tests/test_prune.py
 	$(PY) tests/test_snapfuzz.py
 	$(PY) tests/test_tables.py
 	$(PY) tests/test_fuzz.py
