@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Speed: merged book hash slots (+12% ids path on top of the intern)
+
+- The book's split probe arrays (8-byte hashes, 4-byte values — two
+  cache lines per probe) merge into one 16-byte slot array; probe
+  arithmetic, values and ids are bit-exact by construction. Ids path:
+  cold 4.9 -> 5.5 MB/s, warm 6.6 -> 7.4 MB/s. Cumulative this cycle:
+  cold 1.8 -> 5.5 (+205%), warm 4.1 -> 7.4 (+80%).
+- A fused lockstep emit was attempted and REVERTED: the engine's
+  persistent OutVecs diverge in capacity across encode modes (spans-only
+  never grows the ids vector) and the fused capacity check segfaulted —
+  caught by the fuzz gate, root-caused, per-vector growth documented as
+  load-bearing.
+
+### Feature: batch_encode — thread-parallel LM-prep tokens
+
+- `ratec.batch_encode(docs, c, threads)` returns (ids int32, lens int32)
+  per doc, bit-exact vs cold one-shot engines; the C batch worker gains
+  an ids mode (store_book + all three output vectors per job). On this
+  2-core box, aggregate throughput exceeds the single-engine warm rate.
+
+### Trainer: chunked + checkpointed cross-entropy for big-vocab heads
+
+- The logits tensor is batch*ctx*vocab*4B — 2.4 GB at C=14's 147,712-row
+  head, a global OOM on a 3 GB box (root-caused from dmesg). TwinLM
+  gains trunk()/forward split; the trainer applies the head per
+  16-position chunk under gradient checkpointing (identical math; one
+  chunk's logits in memory; C<=11 rows keep the unchunked path
+  bit-identically). Unblocks the pre-registered C=14 sweep arm.
+
+### Gates + docs
+
+- P3.3 record-drift hardening: the tables gate re-verifies sha256 of
+  every bound record input present on disk (36 files, no drift) — stale
+  provenance now fails the suite.
+- `docs/ARCHITECTURE.md`: the definitive architecture document — layers,
+  invariants, concurrency model, defaults audit; every number cited from
+  a committed record.
+- README: batch_encode, current ids-path numbers, roadmap refresh.
+
+### C-sweep extension (pre-registered, in flight)
+
+- `RATEC_SWEEP=14` extension arm registered BEFORE its run (its
+  interpretations live in the runner + the record's extension block);
+  C=12's recorded rows and the frozen protocol are untouched. Training
+  is checkpoint-resumable (every 50 steps).
+
 ### Speed: rolling-hash book intern (PLAN_v0.8 P1, landed early)
 
 - `book_intern` re-ran fnv1a64 over the whole patch content at every
