@@ -38,8 +38,11 @@ class RateC:
         downstream (embedding width, context budget).
     store_book : bool
         Keep the dynamic patch book (content -> id) so `encode`/`decode`
-        round-trip without the source text. Turn off for bulk LM data prep
-        (use `encode_to_spans`/`batch_spans`, which only need offsets).
+        round-trip without the source text. Off is marginally faster for
+        spans-only output; for LM data prep you need ids, which requires
+        the book — with the rolling-hash intern (v0.8) the book's cost
+        over spans-only is just the per-new-entry arena write, so id
+        throughput roughly equals span throughput.
     pf : int
         Software prefetch depth (0-4); -1 = auto, which resolves to the
         measured default 2 on x86-64 (`PF_DEFAULT` in `_rcengine.c`).
