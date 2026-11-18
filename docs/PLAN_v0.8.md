@@ -120,3 +120,31 @@ controlled:
   (packed streams), CI green, tag + release.
 - v0.8.0: P1 levers 1–4 with bit-exact gates, P2 ablations 2–3, P3.1–3.4;
   release notes carry before/after MB/s and the ablation numbers.
+
+## Status (updated in-cycle — what actually happened)
+
+- **P1 speed**: landed early. Rolling-hash intern (+61% warm / +172%
+  cold ids path) and merged book hash slots (+12% on top; cold 5.5 /
+  warm 7.4 MB/s). A fused lockstep emit was attempted and REVERTED —
+  the engine's persistent OutVecs diverge in capacity across encode
+  modes and the fused check segfaults (caught by the fuzz gate;
+  per-vector growth is load-bearing). Judge-only remains 9.6 MB/s
+  (tiktoken parity); the ids-path gap to it is now mostly arena writes
+  for new book entries.
+- **P1 speed, new feature**: `batch_encode` — thread-parallel per-doc
+  ids+lens for LM prep, bit-exact vs cold one-shot engines. For
+  many-doc corpora this multiplies throughput by cores.
+- **P2 ablations**: 2 closed (tied-head is structurally impossible —
+  "tied" IS ratec_direct), 3 done positive (length field contributes
+  −0.172 BPB at 2400 steps, domain-structured zh/code-first).
+- **P3 gates**: test_streams.py (8 producer gates) + test_speed_floor.py
+  landed; suite = 18 gates, all green on the new core.
+- **C-sweep extension (pre-registered)**: C=14 arm running. The first
+  launch OOM-killed (2.4 GB logits tensor at the 147,712-row head);
+  the trainer now applies the head per 16-position chunk under gradient
+  checkpointing (identical math, one chunk's logits in memory; C<=11
+  rows bit-identical on the unchunked path). ~6 h at this head size,
+  checkpointed every 50 steps — resumable across turn boundaries.
+- **Push state**: the v0.7.0 tag and release are on GitHub; this
+  cycle's commits (E1, batch_encode, trainer fix, extension) are local
+  until a rotated token lands.
