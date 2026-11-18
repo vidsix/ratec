@@ -85,11 +85,37 @@ def stream_bytes(raw: bytes):
 
 def _spans_to_arrays(spans):
     if not spans:
-        return (np.zeros(0, dtype=np.int32), np.zeros(0, dtype=np.int32))
+        return (np.zeros(0, dtype=np.int32), np.zeros(0, dtype=np.int32),
+                np.zeros(0, dtype=np.int64))
     ids = np.fromiter((s[2] for s in spans), dtype=np.int32, count=len(spans))
     lens = np.fromiter((s[1] - s[0] for s in spans), dtype=np.int32,
                        count=len(spans))
-    return ids, lens
+    starts = np.fromiter((s[0] for s in spans), dtype=np.int64,
+                         count=len(spans))
+    return ids, lens, starts
+
+
+def _pack_ids(ids, lens, starts, raw, c, base=0):
+    """Map (book_id, len, start) onto the SHIPPED packed layout — the one
+    twin_study.py's original id arithmetic decodes (content slot =
+    (id-256) % 2^C, length slab = (id-256) // 2^C, single bytes carried
+    as their byte value). The producer MUST emit this layout: an LM table
+    sized from raw dense book ids would grow with the book (145k+ rows at
+    C=10), breaking compute-matching and filling the head softmax with
+    dead rows — the v0.7.0 P3 protocol bug this packing fixes before the
+    sweep ran. The modulo collapse IS the budget semantics: 2^C content
+    slots serve all 145k book contents, so a larger C buys a larger
+    budget — the question the sweep exists to answer. lens stay TRUE byte
+    lengths (eval weighting); lens > 10 collapse into the top slab for
+    the id (the shipped streams' LEN_CAP behavior), which only affects
+    the model's length-field granularity, never byte-weighted eval."""
+    m = 1 << c
+    raw_bytes = np.frombuffer(raw, dtype=np.uint8).astype(np.int32)
+    packed = 256 + (np.minimum(lens, 10) - 2) * m + (ids % m)
+    # starts are ABSOLUTE stream offsets (a continued engine's spans run
+    # past the mix into the val stream); `base` maps them into `raw`
+    out = np.where(lens == 1, raw_bytes[starts - base], packed)
+    return out.astype(np.int32)
 
 
 def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
@@ -98,11 +124,13 @@ def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
     shipped MIX_OFFSETS, straddling patches assigned to the slice their
     start byte falls in) and then each domain's val file WITHOUT reset, so
     val ids live in the same book as train ids (the shipped streams'
-    proven design). Ids are the engine's dense book ids; lens are TRUE
-    byte lengths (uncapped — byte-weighted eval consumes them as bytes;
-    the model's length field clamps separately via twin_study
-    --lens_lidx). With prune=True the book churns at prune boundaries and
-    ids renumber — the bounded-vocabulary mechanism under measurement.
+    proven design). Ids are emitted in the SHIPPED PACKED layout (see
+    _pack_ids) so every arm shares the fixed 256+9*2^C-row table —
+    compute-matched with the ladder arms and decodable by twin_study.py's
+    original id arithmetic; lens are TRUE byte lengths (byte-weighted
+    eval consumes them directly). With prune=True the book churns at
+    prune boundaries and slots renumber — the bounded-vocabulary
+    mechanism under measurement.
 
     Outputs {prefix}_dom_{split}_{ids,lens}.npy with
     prefix = ratec_c{c}[_pr], bound by sha256 in
@@ -121,7 +149,8 @@ def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
     off = 0                                   # bytes consumed so far
     for k in range(0, len(mix), FEED_CHUNK):
         spans = eng.feed(mix[k:k + FEED_CHUNK])
-        ids, lens = _spans_to_arrays(spans)
+        ids, lens, starts = _spans_to_arrays(spans)
+        ids = _pack_ids(ids, lens, starts, mix, c)
         # assign each token to the slice its START byte falls in; token
         # starts are contiguous (each patch starts where the previous
         # ends) and feed() reports absolute stream offsets
@@ -139,7 +168,8 @@ def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
                 per_dom[si].append((ids[m], lens[m]))
         off += len(mix[k:k + FEED_CHUNK])
     spans = eng.flush()
-    ids, lens = _spans_to_arrays(spans)
+    ids, lens, starts = _spans_to_arrays(spans)
+    ids = _pack_ids(ids, lens, starts, mix, c)
     if len(ids):
         cum = np.concatenate(([spans[0][0]],
                               spans[0][0] + np.cumsum(lens.astype(np.int64))[:-1]))
@@ -155,13 +185,21 @@ def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
     man = {"protocol": {
         "what": f"sweep/prune streams at C={c} ({'pruned' if prune else 'unpruned'} book)",
         "regime": "single engine over mix (chunked feed) then per-domain "
-                  "val without reset; dense book ids; TRUE byte lens; "
-                  "train slices = shipped MIX_OFFSETS partition; model "
-                  "side consumes them with twin_study --lens_lidx",
+                  "val without reset; ids emitted in the SHIPPED PACKED "
+                  "layout (256 + (book_id % 2^C) + (min(len,10)-2)*2^C, "
+                  "1-byte tokens as raw byte values) so every arm shares "
+                  "the fixed 256+9*2^C-row table — compute-matched with "
+                  "the ladder's arms; TRUE byte lens; train slices = "
+                  "shipped MIX_OFFSETS partition; consumed with plain "
+                  "twin_study.py id arithmetic (no --lens_lidx)",
         "mix_offsets": MIX_OFFSETS,
-        "note": ("ids are engine book ids (dense, renumbered at prune "
-                 "boundaries when pruned); unlike the shipped v0.5.0-era "
-                 "packed-id streams there is no length-slab id structure"),
+        "note": ("the modulo collapse of book ids into 2^C content slots "
+                 "IS the budget semantics (a larger C buys more slots); "
+                 "prune-mode ids renumber at boundaries, so slots churn "
+                 "there — the mechanism under measurement; fixed v0.7.0 "
+                 "P3 before the sweep ran (the earlier draft emitted raw "
+                 "dense ids, which would have grown the LM table with "
+                 "the book)"),
     }}
     man["protocol"].update(record_envelope(
         inputs={"_train_mix.txt": os.path.relpath(mix_path, _ROOT),
@@ -169,6 +207,9 @@ def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
         deps=("numpy",)))
     man["files"] = {}
     tot_bytes = 0
+    stream_base = TRAIN_BYTES   # val streams continue the mix stream:
+                                # each domain's spans start where the
+                                # previous domain's ended (absolute)
     for di, dom in enumerate(DOMAINS):
         ids = np.concatenate([a for a, _ in per_dom[di]]) \
             if per_dom[di] else np.zeros(0, dtype=np.int32)
@@ -177,8 +218,10 @@ def regime_ratec_c(c: int, prune: bool, prune_after: int, prune_min: int):
         tot_bytes += int(lens.sum())
         val = open(os.path.join(DATA, f"{dom}_val.txt"), "rb").read()
         vspans = eng.encode_to_spans(val)
-        v_ids, v_lens = _spans_to_arrays(vspans)
+        v_ids, v_lens, v_starts = _spans_to_arrays(vspans)
+        v_ids = _pack_ids(v_ids, v_lens, v_starts, val, c, base=stream_base)
         tot_bytes += int(v_lens.sum())
+        stream_base += len(val)
         for tag, arr in ((f"{prefix}_{dom}_train_ids", ids),
                          (f"{prefix}_{dom}_train_lens", lens),
                          (f"{prefix}_{dom}_val_ids", v_ids),

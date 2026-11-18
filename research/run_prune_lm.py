@@ -3,13 +3,15 @@
 pruning of the patch book improve LM BPB at equal compute?
 
 Design (fully controlled, same producer, same protocol):
-  arm A  ratec_direct, C=10, streams ratec_c10   (dense book, unpruned)
+  arm A  ratec_direct, C=10, streams ratec_c10   (unpruned book)
   arm B  ratec_direct, C=10, streams ratec_c10_pr (prune_after=1 MiB,
          prune_min=2: singletons dropped, ids renumbered at boundaries)
 Both arms consume identical byte segmentation — the patcher is
-book-independent (asserted: identical per-domain token counts) — so the
-ONLY difference is id assignment: unbounded rare-heavy vocabulary vs a
-pruned, more-frequent one with id churn.
+book-independent (asserted: identical per-domain token counts) — and the
+SHIPPED PACKED id layout (fixed 9472-row table, parameter-exact), so the
+ONLY difference is which CONTENTS survive in the book and where their
+slots land: rare-heavy unbounded survival vs a pruned, more-frequent
+allocation with slot churn at prune boundaries.
 
 Engine stats (runs/streams_manifest_c10*.json engine_stats) tell the
 mechanism side: the unpruned C=10 book holds ~146k contents; pruning
@@ -87,7 +89,7 @@ def load_record():
                        "prune_after": 1 << 20, "prune_min": 2},
             "control": "identical byte segmentation across arms (patcher "
                        "is book-independent; per-domain token counts "
-                       "asserted equal); only id assignment differs",
+                       "asserted equal); slots come from the same packed layout — what differs is which contents survive in the book",
             "interpretations_pre_registered": PRE_REGISTERED,
         },
         "arms": {},
@@ -129,7 +131,7 @@ def main():
         if not os.path.exists(out):
             cmd = [sys.executable, os.path.join(HERE, "twin_study.py"),
                    "--kind", "ratec_direct", "--c", "10",
-                   "--prefix", pfx, "--lens_lidx",
+                   "--prefix", pfx,
                    "--steps", str(STEPS), "--tag", f"_{tag}"]
             print(f"[prune_lm] RUN {' '.join(cmd)}", flush=True)
             p = subprocess.run(cmd, env=os.environ.copy())

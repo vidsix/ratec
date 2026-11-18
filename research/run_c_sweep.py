@@ -61,10 +61,13 @@ def load_record():
                     "2400 steps, probe protocol otherwise frozen "
                     "(PLAN_v0.7 P3)",
             "arm": "ratec_direct (tied embedding/head over 256+9*2^C rows)",
-            "streams": "single-engine dense-id streams (build_streams.py "
-                       "--c C; sha-bound in runs/streams_manifest_c{C}"
-                       ".json), consumed with --lens_lidx (length field "
-                       "from true byte lengths)",
+            "streams": "single-engine streams in the SHIPPED PACKED id "
+                       "layout (build_streams.py --c C; sha-bound in "
+                       "runs/streams_manifest_c{C}.json) — every arm "
+                       "shares the fixed 256+9*2^C-row table, so the "
+                       "comparison is parameter-EXACT across C (the "
+                       "producer's modulo collapse of book ids into 2^C "
+                       "content slots IS the budget semantics)",
             "frozen": {"d": 96, "layers": 3, "heads": 4, "ctx": 256,
                        "batch": 16, "lr": 3e-4, "seed": 42,
                        "steps": STEPS,
@@ -101,7 +104,7 @@ def main():
         if not os.path.exists(out):
             cmd = [sys.executable, os.path.join(HERE, "twin_study.py"),
                    "--kind", "ratec_direct", "--c", str(c),
-                   "--prefix", f"ratec_c{c}", "--lens_lidx",
+                   "--prefix", f"ratec_c{c}",
                    "--steps", str(STEPS), "--tag", f"_csweep_c{c}"]
             print(f"[c_sweep] RUN {' '.join(cmd)}", flush=True)
             p = subprocess.run(cmd, env=os.environ.copy())

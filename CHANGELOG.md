@@ -79,20 +79,24 @@ enveloped, every number table-generated and drift-guarded. Plan:
 
 ### P3 — the LM-optimal C sweep
 - **`research/run_c_sweep.py` → `research/lm_c_sweep.json`**: ratec_direct
-  at C ∈ {8, 10, 12}, 2400 steps each, on single-engine dense-id streams
-  (`research/build_streams.py --c C`: one engine tokenizes the whole
-  corpus — chunked feed, one-shot-equivalent — and the val streams
-  continue the SAME engine so val ids live in the train book, the shipped
-  streams' proven design). The library's own C sweep optimizes tokenizer
+  at C ∈ {8, 10, 12}, 2400 steps each, on single-engine streams in the
+  SHIPPED PACKED id layout (`research/build_streams.py --c C`: one engine
+  tokenizes the whole corpus — chunked feed, one-shot-equivalent — and
+  the val streams continue the SAME engine so val ids live in the train
+  book, the shipped streams' proven design). A protocol bug in the first
+  draft (raw dense book ids) would have grown the LM table with the book
+  (145k+ rows at C=10, breaking compute-matching and filling the head
+  softmax with dead rows); the producer now collapses book ids into the
+  shipped `256 + (id−256) % 2^C + (len−2)·2^C` layout BEFORE the sweep
+  ran — zero compute wasted — so every arm shares the fixed 256+9·2^C-row
+  table and the comparison is parameter-exact across C. The library's own C sweep optimizes tokenizer
   rate; this one asks the downstream question at probe scale. Parameter
   growth with C is reported per run as an explicit confound; interpretations
   pre-registered (interior argmin vs monotone-to-edge).
 - **`twin_study.py` gains `--c`, `--prefix`, `--lens_lidx`** (all
-  default-preserving): dense-id streams need the length field from true
-  byte lengths (the documented (id, byte_len) contract) instead of id
-  arithmetic, which is only well-defined for the shipped packed-id
-  streams; provenance for both stream generations documented in
-  `research/README.md`.
+  default-preserving; `--lens_lidx` retained as the documented dense-id
+  interface, unused by the sweep after the packing fix); provenance for
+  both stream generations documented in `research/README.md`.
 
 ### P4 — tests
 - `tests/test_prune.py` added to the suite (the 8th gate) and registered

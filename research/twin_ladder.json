@@ -32,19 +32,18 @@
    "if the gap plateaus, the doc states where it plateaus; either way the record is the contribution. Written before any rung above 600 was trained (PLAN_v0.7.md P1)."
   ],
   "engine_note": "training runs executed by the engine binary tagged 0.6.0 (the 0.7.0 bump changes the version string and adds the opt-in prune feature, which the ladder does not use); ratec_version in the envelope reflects the runner process's import at rewrite",
-  "ratec_version": "0.7.0",
+  "ratec_version": "",
   "deps": {
-   "numpy": "2.1.3",
-   "torch": "2.15.0+cpu"
+   "numpy": "2.1.3"
   },
-  "git_rev": "91ae140",
+  "git_rev": "a357bd8",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-17T23:35:17+00:00",
+  "created_utc": "2026-11-18T10:21:05+00:00",
   "inputs": {
    "bpe_mix_en_train_ids.npy": {
     "sha256": "212d3026f239737dc87cbd3f92724a8bd0e811cf619e4b052397a8ff54d74b8d",
@@ -408,7 +407,7 @@
   ],
   "runs_complete": 10,
   "runs_total": 16,
-  "updated_utc": "2026-11-17T23:35:17Z"
+  "updated_utc": "2026-11-18T10:21:05Z"
  },
  "gap_table": {
   "600": {
