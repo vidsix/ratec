@@ -71,8 +71,9 @@ enveloped, every number table-generated and drift-guarded. Plan:
   save→load→save identity.
 - **The LM measurement** (`research/run_prune_lm.py` →
   `research/book_pruning.json`): ratec_direct at C=10, 2400 steps, pruned
-  vs unpruned single-engine dense streams — identical byte segmentation
-  asserted per domain (token counts and lens), only id assignment differs;
+  vs unpruned single-engine packed-layout streams — identical byte
+  segmentation asserted per domain (token counts and lens), only the
+  book's content survival and slot allocation differ;
   engine stats (book sizes, `n_pruned`) reported beside the BPB delta.
   Pre-registered: if the win is within the determinism band, the feature
   stays opt-in and the doc says so.

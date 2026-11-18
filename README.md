@@ -327,7 +327,8 @@ paths to raw speed.
    improves 1.94× more than BPE for the same extra compute, in every
    domain. All of that landed as v0.7.0 (item 14). Next: tokenizer
    ecosystem bridges (GGUF/llama.cpp, vLLM) once the training side
-   settles, and the fast-lane/profiler levers (item 4) for raw speed.
+   settles, and the measured speed levers (PLAN_v0.8: judge memo,
+   book-on batch, pre-sizing — 5.5 MB/s vs tiktoken's 9.8 today).
 6. **~~Fractional C~~ done** — double C everywhere, snapshot v5.
 7. **~~Credit carry-over patcher~~ done** — `carry=True`; −15.1% patches
    at C=20, mean rate → C exactly, streaming bit-exact.

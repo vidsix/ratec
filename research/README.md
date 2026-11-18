@@ -43,12 +43,16 @@ added in v0.7.0 is the in-repo producer for the sweep/prune streams:
 ONE current-engine run over the whole corpus (chunked feed,
 one-shot-equivalent, split at the shipped `MIX_OFFSETS` partition — the
 hr/zh/code slices verified byte-identical to `{d}_train.txt`), val
-continuing the same engine, ids now DENSE book ids and lens TRUE byte
-lengths, consumed with `twin_study.py --lens_lidx` (the length field
-from the documented `(id, byte_len)` contract instead of id
-arithmetic). Every regime writes its own sha256-bound manifest
-(`streams_manifest_c{N}[_pr].json`). The two id generations must never
-be mixed inside one experiment; each record names its streams.
+continuing the same engine, ids emitted in the SAME SHIPPED PACKED
+layout (`256 + (book_id % 2^C) + (min(len,10)-2)*2^C`, single bytes
+raw) — the producer's modulo collapse of 145k-book contents into 2^C
+slots IS the budget semantics, and it keeps every arm parameter-exact
+against the ladder's arms (the first draft emitted raw dense ids, which
+would have grown the LM table with the book; fixed before the sweep
+ran). lens are TRUE byte lengths. Every regime writes its own
+sha256-bound manifest (`streams_manifest_c{N}[_pr].json`). The two id
+generations must never be mixed inside one experiment; each record
+names its streams.
 
 ## Twin study — `twin_study.py`, `twin_reeval.py`, `twin_*.json`
 
