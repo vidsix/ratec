@@ -32,19 +32,19 @@
    "if the gap plateaus, the doc states where it plateaus; either way the record is the contribution. Written before any rung above 600 was trained (PLAN_v0.7.md P1)."
   ],
   "engine_note": "training runs executed by the engine binary tagged 0.6.0 (the 0.7.0 bump changes the version string and adds the opt-in prune feature, which the ladder does not use); ratec_version in the envelope reflects the runner process's import at rewrite",
-  "ratec_version": "0.6.0",
+  "ratec_version": "0.7.0",
   "deps": {
    "numpy": "2.1.3",
    "torch": "2.15.0+cpu"
   },
-  "git_rev": "fd9341b",
+  "git_rev": "91ae140",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-17T16:27:45+00:00",
+  "created_utc": "2026-11-17T23:35:17+00:00",
   "inputs": {
    "bpe_mix_en_train_ids.npy": {
     "sha256": "212d3026f239737dc87cbd3f92724a8bd0e811cf619e4b052397a8ff54d74b8d",
@@ -263,20 +263,189 @@
     "wall_sec": 137.69077682495117,
     "source": "committed_600"
    }
+  },
+  "1200": {
+   "bpe": {
+    "final_bpb_overall": 2.836526199329506,
+    "final_bpb_per_domain": {
+     "en": 2.5006668739808804,
+     "hr": 2.839908741908014,
+     "zh": 3.175604746942127,
+     "code": 3.141944899745451
+    },
+    "params": 1269600,
+    "wall_sec": 757.2477641105652,
+    "train_flops_est": 37442027520000,
+    "source": "run"
+   },
+   "ratec_direct": {
+    "final_bpb_overall": 4.182585890494263,
+    "final_bpb_per_domain": {
+     "en": 4.023419617162718,
+     "hr": 4.190247800697899,
+     "zh": 4.60763051605892,
+     "code": 4.168952580200876
+    },
+    "params": 1269600,
+    "wall_sec": 561.7131063938141,
+    "train_flops_est": 37442027520000,
+    "source": "run"
+   },
+   "ratec": {
+    "final_bpb_overall": 4.180684256722992,
+    "final_bpb_per_domain": {
+     "en": 4.000077119510125,
+     "hr": 4.215284151841625,
+     "zh": 4.549612323217895,
+     "code": 4.216576192828499
+    },
+    "params": 1405248,
+    "wall_sec": 555.0403728485107,
+    "train_flops_est": 41442449817600,
+    "source": "run"
+   },
+   "bytes": {
+    "final_bpb_overall": 3.885070711792529,
+    "final_bpb_per_domain": {
+     "en": 3.538817356556899,
+     "hr": 3.7400080147411314,
+     "zh": 4.599621927473844,
+     "code": 4.072445815670909
+    },
+    "params": 384864,
+    "wall_sec": 256.2932777404785,
+    "train_flops_est": 11350101196800,
+    "source": "run"
+   }
+  },
+  "2400": {
+   "bpe": {
+    "final_bpb_overall": 2.606778821644411,
+    "final_bpb_per_domain": {
+     "en": 2.3318767889618264,
+     "hr": 2.558841796465368,
+     "zh": 2.9984002548809183,
+     "code": 2.8193947920400073
+    },
+    "params": 1269600,
+    "wall_sec": 1221.4313044548035,
+    "train_flops_est": 74884055040000,
+    "source": "run"
+   },
+   "ratec_direct": {
+    "final_bpb_overall": 3.8182351797835588,
+    "final_bpb_per_domain": {
+     "en": 3.7015637022534382,
+     "hr": 3.8189097184218417,
+     "zh": 4.255774872150024,
+     "code": 3.737318604482521
+    },
+    "params": 1269600,
+    "wall_sec": 1200.5898461341858,
+    "train_flops_est": 74884055040000,
+    "source": "run"
+   },
+   "ratec": {
+    "final_bpb_overall": 3.7774342057373285,
+    "final_bpb_per_domain": {
+     "en": 3.6850635906906013,
+     "hr": 3.838482846226139,
+     "zh": 3.93660346097171,
+     "code": 3.787895203274177
+    },
+    "params": 1405248,
+    "wall_sec": 1175.8801755905151,
+    "train_flops_est": 82884899635200,
+    "source": "run"
+   },
+   "bytes": {
+    "final_bpb_overall": 3.6747748962697493,
+    "final_bpb_per_domain": {
+     "en": 3.3921322514020606,
+     "hr": 3.5483274933475775,
+     "zh": 4.324152195423265,
+     "code": 3.7936760483812693
+    },
+    "params": 384864,
+    "wall_sec": 554.3952758312225,
+    "train_flops_est": 22700202393600,
+    "source": "run"
+   }
+  },
+  "4800": {
+   "bpe": {
+    "final_bpb_overall": 2.396066459209349,
+    "final_bpb_per_domain": {
+     "en": 2.172204098939016,
+     "hr": 2.3517475153775824,
+     "zh": 2.817618167321918,
+     "code": 2.5121506442673187
+    },
+    "params": 1269600,
+    "wall_sec": 982.4433271884918,
+    "train_flops_est": 149768110080000,
+    "source": "run"
+   },
+   "ratec_direct": {
+    "final_bpb_overall": 3.527039417553595,
+    "final_bpb_per_domain": {
+     "en": 3.4864837290172543,
+     "hr": 3.56797979764476,
+     "zh": 3.720556288101761,
+     "code": 3.4509972213740614
+    },
+    "params": 1269600,
+    "wall_sec": 2894.269555091858,
+    "train_flops_est": 149768110080000,
+    "source": "run"
+   }
   }
  },
  "status": {
-  "rungs_complete": [],
-  "runs_complete": 0,
+  "rungs_complete": [
+   "1200",
+   "2400"
+  ],
+  "runs_complete": 10,
   "runs_total": 16,
-  "updated_utc": "2026-11-17T16:27:41Z"
+  "updated_utc": "2026-11-17T23:35:17Z"
  },
  "gap_table": {
   "600": {
    "bpe_minus_ratec_direct": -1.6841,
    "bpe_minus_ratec": -1.7039,
    "bpe_minus_bytes": -1.0351
+  },
+  "1200": {
+   "bpe_minus_ratec_direct": -1.3461,
+   "bpe_minus_ratec": -1.3442,
+   "bpe_minus_bytes": -1.0485
+  },
+  "2400": {
+   "bpe_minus_ratec_direct": -1.2115,
+   "bpe_minus_ratec": -1.1707,
+   "bpe_minus_bytes": -1.068
   }
  },
- "slopes": {}
+ "slopes": {
+  "bpe_minus_ratec_direct": {
+   "bpb_per_doubling": 0.2363444437116462,
+   "points": 3
+  },
+  "bpe_minus_ratec": {
+   "bpb_per_doubling": 0.2666230985477396,
+   "points": 3
+  },
+  "bpe_minus_bytes": {
+   "bpb_per_doubling": -0.0164343287283919,
+   "points": 3
+  },
+  "arm_bpb_per_doubling": {
+   "bpe": -0.25245563815758265,
+   "ratec_direct": -0.48880008186922885,
+   "ratec": -0.5190787367053222,
+   "bytes": -0.23602130942919075
+  },
+  "improvement_ratio_ratec_direct_over_bpe": 1.9361820771224771
+ }
 }
