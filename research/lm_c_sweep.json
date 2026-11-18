@@ -1,0 +1,93 @@
+{
+ "protocol": {
+  "what": "LM-optimal C sweep: ratec_direct at C in {8,10,12}, 2400 steps, probe protocol otherwise frozen (PLAN_v0.7 P3)",
+  "arm": "ratec_direct (tied embedding/head over 256+9*2^C rows)",
+  "streams": "single-engine streams in the SHIPPED PACKED id layout (build_streams.py --c C; sha-bound in runs/streams_manifest_c{C}.json) \u2014 every arm shares the fixed 256+9*2^C-row table, so the comparison is parameter-EXACT across C (the producer's modulo collapse of book ids into 2^C content slots IS the budget semantics)",
+  "frozen": {
+   "d": 96,
+   "layers": 3,
+   "heads": 4,
+   "ctx": 256,
+   "batch": 16,
+   "lr": 0.0003,
+   "seed": 42,
+   "steps": 2400,
+   "train_bytes": 15811609,
+   "val_bytes": 659473
+  },
+  "interpretations_pre_registered": [
+   "interior argmin over {8,10,12} -> LM-optimal C at probe scale, stated with its BPB;",
+   "monotone decrease to the C=12 edge -> the optimum lies above the swept range; stated as a direction, never extrapolated;",
+   "params grow with C (head rows 256+9*2^C): reported per run as an explicit confound. Written before any sweep run (PLAN_v0.7.md P3)."
+  ],
+  "ratec_version": "0.7.0",
+  "deps": {
+   "numpy": "2.1.3",
+   "torch": "2.15.0+cpu"
+  },
+  "git_rev": "5936cab",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-18T11:25:04+00:00",
+  "inputs": {
+   "streams_manifest_c8": {
+    "sha256": "f891db087557b8ad752292862f320ae2a16dbae5b522f9426eccd57dee42f709",
+    "path": "/home/z/my-project/runs/streams_manifest_c8.json",
+    "bytes": 4099
+   },
+   "streams_manifest_c10": {
+    "sha256": "91059d08159d381865f0ae58f4646f1f548b110d7123fdcee9401bbfc332bff5",
+    "path": "/home/z/my-project/runs/streams_manifest_c10.json",
+    "bytes": 4117
+   },
+   "streams_manifest_c12": {
+    "sha256": "16273e78d8625244d2a46a79f8991f35efee26fb90ce976c08f55c714dd371ea",
+    "path": "/home/z/my-project/runs/streams_manifest_c12.json",
+    "bytes": 4115
+   }
+  }
+ },
+ "rows": {
+  "8": {
+   "final_bpb_overall": 3.527855209353085,
+   "final_bpb_per_domain": {
+    "en": 3.3310429691507664,
+    "hr": 3.5026701820195125,
+    "zh": 4.48147153351978,
+    "code": 3.2803940873861417
+   },
+   "params": 606048,
+   "v_eff": 2560,
+   "train_tokens": 7492702,
+   "bytes_per_token": 2.1102679647475635,
+   "book_size_engine": 69113,
+   "wall_sec": 686.1721904277802,
+   "source": "run"
+  },
+  "10": {
+   "final_bpb_overall": 3.4451468267248564,
+   "final_bpb_per_domain": {
+    "en": 3.2270641212171576,
+    "hr": 3.4006772881668628,
+    "zh": 4.416879491496615,
+    "code": 3.2303222620722343
+   },
+   "params": 1269600,
+   "v_eff": 9472,
+   "train_tokens": 5908663,
+   "bytes_per_token": 2.676004537743987,
+   "book_size_engine": 145802,
+   "wall_sec": 1183.4851825237274,
+   "source": "run"
+  }
+ },
+ "status": {
+  "runs_complete": 2,
+  "runs_total": 3,
+  "updated_utc": "2026-11-18T11:25:04Z"
+ }
+}

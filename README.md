@@ -252,9 +252,9 @@ above 600 was trained. BPB by arm at each rung, plus the headline gap:
 | 600 | 3.112 | 4.796 | 4.816 | 4.147 | −1.684 |
 | 1200 | 2.837 | 4.183 | 4.181 | 3.885 | −1.346 |
 | 2400 | 2.607 | 3.818 | 3.777 | 3.675 | −1.211 |
-| 4800 | 2.396 | 3.527 | — | — | −1.131 |
+| 4800 | 2.396 | 3.527 | 3.521 | 3.185 | −1.131 |
 
-Gap slope: **0.236 BPB per log2-doubling** (least squares over the 3 completed rungs; the gap narrows with training scale).
+Gap slope: **0.179 BPB per log2-doubling** (least squares over the 4 completed rungs; the gap narrows with training scale).
 <!-- /table:ladder -->
 
 Record with per-domain numbers, provenance envelope and the pre-registered
