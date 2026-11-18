@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Speed: rolling-hash book intern (PLAN_v0.8 P1, landed early)
+
+- `book_intern` re-ran fnv1a64 over the whole patch content at every
+  patch close; `_rcengine.c` now maintains the rolling hash per
+  extension byte (identical value by the fnv recurrence — bit-exact by
+  construction; the full gate battery passes, including the pinned
+  id/span fixtures; snapshot bytes stay format v2..v7 unchanged — the
+  hash is derived state, recomputed from the restored obuf on load).
+  Measured on a 2 MB corpus mix, ids path (LM data prep): warm
+  4.1 -> 6.6 MB/s (+61%), cold 1.8 -> 4.9 MB/s (+172%). Honest cost
+  attribution (PLAN_v0.8): the judge alone runs 9.6 MB/s vs tiktoken's
+  9.8 — prediction is at parity; the remaining ids-path gap is patcher
+  bookkeeping. Earlier book-on/off and memoization speed claims in the
+  plan are retracted as measurement artifacts / already-built features.
+- New gates: `tests/test_streams.py` (producer protocol invariants:
+  budget-bounded id space, exact byte conservation, straddle-allowance
+  partition, prune-arm segmentation identity, id-arithmetic round-trip,
+  manifest sha bindings) and `tests/test_speed_floor.py` (loose 2.5 MB/s
+  floor on the ids path).
+
 ## v0.7.0 — 2026-11 (the scale-ladder release)
 
 The s2400 probe's two points become a measured trend: the 4-arm × 4-rung

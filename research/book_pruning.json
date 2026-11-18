@@ -1,0 +1,103 @@
+{
+ "protocol": {
+  "what": "book-pruning LM measurement: ratec_direct C=10, 2400 steps, pruned vs unpruned single-engine dense streams (PLAN_v0.7 P2)",
+  "arms": {
+   "unpruned": {
+    "prefix": "ratec_c10",
+    "pruned": false
+   },
+   "pruned": {
+    "prefix": "ratec_c10_pr",
+    "pruned": true
+   }
+  },
+  "frozen": {
+   "d": 96,
+   "layers": 3,
+   "heads": 4,
+   "ctx": 256,
+   "batch": 16,
+   "lr": 0.0003,
+   "seed": 42,
+   "steps": 2400,
+   "c": 10,
+   "train_bytes": 15811609,
+   "val_bytes": 659473,
+   "prune_after": 1048576,
+   "prune_min": 2
+  },
+  "control": "identical byte segmentation across arms (patcher is book-independent; per-domain token counts asserted equal); slots come from the same packed layout \u2014 what differs is which contents survive in the book",
+  "interpretations_pre_registered": [
+   "if the pruned arm's win is within the determinism band (~0.01 BPB), the feature stays opt-in and the doc says so plainly \u2014 the engine feature ships on its invariants, not on this number;",
+   "the mechanism claim is reported from the engine stats (book sizes, n_pruned) alongside the LM outcome. Written before any run (PLAN_v0.7.md P2)."
+  ],
+  "ratec_version": "0.7.0",
+  "deps": {
+   "numpy": "2.1.3",
+   "torch": "2.15.0+cpu"
+  },
+  "git_rev": "f9ed436",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-18T15:40:42+00:00",
+  "inputs": {
+   "streams_manifest_c10": {
+    "sha256": "91059d08159d381865f0ae58f4646f1f548b110d7123fdcee9401bbfc332bff5",
+    "path": "/home/z/my-project/runs/streams_manifest_c10.json",
+    "bytes": 4117
+   },
+   "streams_manifest_c10_pr": {
+    "sha256": "09ef6ee96c6ac2367b146d022d1fd04a304a917b225beb3ec2e069f04a2d3ea3",
+    "path": "/home/z/my-project/runs/streams_manifest_c10_pr.json",
+    "bytes": 4176
+   }
+  }
+ },
+ "arms": {
+  "unpruned": {
+   "final_bpb_overall": 3.4451468267248564,
+   "final_bpb_per_domain": {
+    "en": 3.2270641212171576,
+    "hr": 3.4006772881668628,
+    "zh": 4.416879491496615,
+    "code": 3.2303222620722343
+   },
+   "params": 1269600,
+   "v_eff": 9472,
+   "train_tokens": 5908663,
+   "engine_book_size": 145802,
+   "engine_n_pruned": 0,
+   "wall_sec": 1186.4461739063263,
+   "source": "run"
+  },
+  "pruned": {
+   "final_bpb_overall": 3.813796533175285,
+   "final_bpb_per_domain": {
+    "en": 3.6335223556764125,
+    "hr": 3.7888016743216917,
+    "zh": 4.849428765168273,
+    "code": 3.493263852551329
+   },
+   "params": 1269600,
+   "v_eff": 9472,
+   "train_tokens": 5908663,
+   "engine_book_size": 44556,
+   "engine_n_pruned": 195923,
+   "wall_sec": 1230.9666032791138,
+   "source": "run"
+  }
+ },
+ "status": {
+  "runs_complete": 2,
+  "runs_total": 2,
+  "updated_utc": "2026-11-18T15:40:42Z"
+ },
+ "result": {
+  "pruned_minus_unpruned_bpb": 0.3686497064504288,
+  "note": "negative = pruning helps the LM at equal compute"
+ }
+}
