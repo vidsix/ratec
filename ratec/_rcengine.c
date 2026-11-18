@@ -61,7 +61,7 @@ static const uint64_t MASK[NO] = {0ull, 255ull, 65535ull, 16777215ull,
 /* Version is single-sourced from pyproject.toml (setup.py injects
  * -DRC_VERSION); the local define is the fallback for standalone builds. */
 #ifndef RC_VERSION
-#define RC_VERSION "0.7.0"
+#define RC_VERSION "0.8.0"
 #endif
 #define PF_DEFAULT 2
 #define MAP_CAPBITS_DEFAULT 22
