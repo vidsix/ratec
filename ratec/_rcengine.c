@@ -196,6 +196,11 @@ static inline __attribute__((always_inline)) int ov_push(OutVec *v, uint32_t x) 
 }
 
 /* ----------------------------------------------------------------- book */
+/* one hash slot: hash + id+1 (0 = empty). 16B = one slot per probe in a
+ * single cache line, where the split hk/hv arrays cost two lines per
+ * probe; the probe arithmetic (slot index, linear step, values) is
+ * unchanged, so ids and outputs are bit-exact by construction. */
+typedef struct { uint64_t h; uint32_t ref; } BSlot;
 typedef struct {
     uint8_t  *arena; size_t alen, acap;
     uint32_t *off, *ln;          /* by id */
@@ -203,8 +208,7 @@ typedef struct {
                                     (v0.7 prune mode; maintained always,
                                     consumed only when prune_after > 0) */
     size_t n, cap;               /* number of entries */
-    uint64_t *hk;                /* slot hash */
-    uint32_t *hv;                /* slot value = id+1, 0 = empty */
+    BSlot   *slot;               /* open-addressed, linear probing */
     uint64_t capbits, mask;
     int err;
 } Book;
@@ -217,25 +221,23 @@ static uint64_t fnv1a64(const uint8_t *p, size_t n) {
 static void book_init(Book *b) {
     memset(b, 0, sizeof *b);
     b->capbits = 10; b->mask = (1ull << b->capbits) - 1;
-    b->hk = (uint64_t *)calloc(1ull << b->capbits, 8);
-    b->hv = (uint32_t *)calloc(1ull << b->capbits, 4);
-    if (!b->hk || !b->hv) { b->err = 1; }
+    b->slot = (BSlot *)calloc(1ull << b->capbits, sizeof(BSlot));
+    if (!b->slot) { b->err = 1; }
 }
 static int book_grow_hash(Book *b) {
     uint64_t ncap = b->capbits + 1;
-    uint64_t *hk = (uint64_t *)calloc(1ull << ncap, 8);
-    uint32_t *hv = (uint32_t *)calloc(1ull << ncap, 4);
-    if (!hk || !hv) { free(hk); free(hv); return -1; }
+    BSlot *sl = (BSlot *)calloc(1ull << ncap, sizeof(BSlot));
+    if (!sl) return -1;
     uint64_t nmask = (1ull << ncap) - 1;
     for (size_t id = 0; id < b->n; id++) {
         uint64_t h = fnv1a64(b->arena + b->off[id], b->ln[id]);
         uint64_t j = h & nmask;
-        while (hv[j]) j = (j + 1) & nmask;
-        hv[j] = (uint32_t)(id + 1);
-        hk[j] = h;
+        while (sl[j].ref) j = (j + 1) & nmask;
+        sl[j].ref = (uint32_t)(id + 1);
+        sl[j].h = h;
     }
-    free(b->hk); free(b->hv);
-    b->hk = hk; b->hv = hv; b->capbits = ncap; b->mask = nmask;
+    free(b->slot);
+    b->slot = sl; b->capbits = ncap; b->mask = nmask;
     return 0;
 }
 /* returns id, or ID_NONE on allocation failure (b->err set) */
@@ -246,8 +248,8 @@ static uint32_t book_intern_h(Book *b, const uint8_t *p, size_t len,
         if (book_grow_hash(b) < 0) { b->err = 1; return ID_NONE; }
     }
     uint64_t i = h & b->mask;
-    while (b->hv[i]) {
-        uint32_t id = b->hv[i] - 1;
+    while (b->slot[i].ref) {
+        uint32_t id = b->slot[i].ref - 1;
         if (b->ln[id] == len && memcmp(b->arena + b->off[id], p, len) == 0) {
             if (b->cnt && b->cnt[id] < 0xFFFFFFFFu) b->cnt[id]++;
             return id;
@@ -278,18 +280,15 @@ static uint32_t book_intern_h(Book *b, const uint8_t *p, size_t len,
     b->off[b->n] = (uint32_t)b->alen;
     b->ln[b->n] = (uint32_t)len;
     b->alen += len;
-    b->hv[i] = (uint32_t)(b->n + 1);
-    b->hk[i] = h;
+    b->slot[i].ref = (uint32_t)(b->n + 1);
+    b->slot[i].h = h;
     if (b->cnt) b->cnt[b->n] = 1;
     b->n++;
     return (uint32_t)(b->n - 1);
 }
 
-/* general entry: callers without a rolling hash (book rebuild on
- * snapshot save/load, decode-side table construction) */
-static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
-    return book_intern_h(b, p, len, fnv1a64(p, len));
-}
+/* (no general intern entry: every caller either has a rolling hash
+ * (encode path) or re-derives fnv1a64 inline (snapshot/prune rebuilds)) */
 
 /* book_prune: drop entries whose since-last-prune count is below minc
  * (the v0.7 frequency-aware prune — singleton starvation remedy), then
@@ -322,13 +321,13 @@ static int64_t book_prune(Book *b, uint32_t minc) {
     b->alen = wpos;
     memset(b->cnt, 0, b->n * 4);              /* window counts restart */
     /* rebuild the hash over the survivors */
-    memset(b->hv, 0, ((size_t)b->mask + 1) * 4);
+    memset(b->slot, 0, ((size_t)b->mask + 1) * sizeof(BSlot));
     for (size_t id = 0; id < b->n; id++) {
         uint64_t h_ = fnv1a64(b->arena + b->off[id], b->ln[id]);
         uint64_t j = h_ & b->mask;
-        while (b->hv[j]) j = (j + 1) & b->mask;
-        b->hv[j] = (uint32_t)(id + 1);
-        b->hk[j] = h_;
+        while (b->slot[j].ref) j = (j + 1) & b->mask;
+        b->slot[j].ref = (uint32_t)(id + 1);
+        b->slot[j].h = h_;
     }
     return removed;
 }
@@ -458,7 +457,7 @@ static void core_free(RcCore *e) {
     free(e->obuf);
     free(e->book.arena); free(e->book.off); free(e->book.ln);
     free(e->book.cnt);
-    free(e->book.hk); free(e->book.hv);
+    free(e->book.slot);
     ov_free(&e->ros); ov_free(&e->roe); ov_free(&e->roi);
     free(e);
 }
@@ -510,16 +509,16 @@ static void core_reset_keep(RcCore *e) {
     e->next_prune_at = e->prune_after;   /* boundary schedule restarts */
     e->poisoned = 0;
     e->book.n = 0; e->book.alen = 0;
-    if (!e->book.hk || !e->book.hv) {
+    if (!e->book.slot) {
         /* book tables were lost to an earlier OOM: re-init so the
          * advertised "reset() recovers" is actually true */
-        free(e->book.hk); free(e->book.hv);
-        e->book.hk = NULL; e->book.hv = NULL;
+        free(e->book.slot);
+        e->book.slot = NULL;
         book_init(&e->book);
     } else {
         e->book.err = 0;              /* reset clears a book-OOM flag too */
         uint64_t bmask = e->book.mask;
-        memset(e->book.hv, 0, (bmask + 1) * 4);
+        memset(e->book.slot, 0, (bmask + 1) * sizeof(BSlot));
     }
 }
 
@@ -603,16 +602,19 @@ static inline float rc_log2_fast(double x) {
 
 /* emit one closed patch (start,end,id). ove/ovi may be NULL. Returns 0 or
  * a negative error (-1 OOM, -2 span overflow); *npatch counts successes. */
-static inline __attribute__((always_inline)) int
-emit_patch(OutVec *ovs, OutVec *ove, OutVec *ovi, int store_book, Book *bk,
-           uint64_t st, uint64_t en, const uint8_t *ct, size_t cl,
-           uint64_t h, size_t *npatch) {
+static int emit_patch(OutVec *ovs, OutVec *ove, OutVec *ovi, int store_book,
+                      Book *bk, uint64_t st, uint64_t en, const uint8_t *ct,
+                      size_t cl, uint64_t h, size_t *npatch) {
     if (st > 0xFFFFFFFFull || en > 0xFFFFFFFFull) return -2;
     uint32_t id_ = ID_NONE;
     if (ovi && store_book) {
         id_ = book_intern_h(bk, ct, cl, h);
         if (id_ == ID_NONE) return -1;
     }
+    /* three independent pushes: the engine's persistent OutVecs diverge
+     * in capacity across encode modes (spans-only never grows the ids
+     * vector), so a fused lockstep check is NOT safe here — each vector
+     * guards its own growth */
     if (ovs && ov_push(ovs, (uint32_t)st) < 0) return -1;
     if (ove && ov_push(ove, (uint32_t)en) < 0) return -1;
     if (ovi && ov_push(ovi, id_) < 0) return -1;
@@ -1203,11 +1205,10 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         while ((bn + 1) * 2 >= (1ull << want) && want < 31) want++;
         if ((bn + 1) * 2 >= (1ull << want)) goto fail;
         if (want != e->book.capbits) {
-            free(e->book.hk); free(e->book.hv);
+            free(e->book.slot);
             e->book.capbits = want; e->book.mask = (1ull << want) - 1;
-            e->book.hk = (uint64_t *)calloc(1ull << want, 8);
-            e->book.hv = (uint32_t *)calloc(1ull << want, 4);
-            if (!e->book.hk || !e->book.hv) goto fail;
+            e->book.slot = (BSlot *)calloc(1ull << want, sizeof(BSlot));
+            if (!e->book.slot) goto fail;
         }
         if (alen) {
             uint8_t *ar = (uint8_t *)malloc((size_t)alen);
@@ -1245,10 +1246,12 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         e->book.n = bn;
         /* rebuild hash table */
         for (uint64_t id = 0; id < bn; id++) {
-            uint64_t j = fnv1a64(e->book.arena + e->book.off[id],
-                                 e->book.ln[id]) & e->book.mask;
-            while (e->book.hv[j]) j = (j + 1) & e->book.mask;
-            e->book.hv[j] = (uint32_t)(id + 1);
+            uint64_t h_ = fnv1a64(e->book.arena + e->book.off[id],
+                                  e->book.ln[id]);
+            uint64_t j = h_ & e->book.mask;
+            while (e->book.slot[j].ref) j = (j + 1) & e->book.mask;
+            e->book.slot[j].ref = (uint32_t)(id + 1);
+            e->book.slot[j].h = h_;
         }
     }
     /* v7 prune section (prune-mode engines only) */
@@ -1681,25 +1684,45 @@ static PyTypeObject Engine_Type = {
 /* ------------------------------------------------------------ batching */
 typedef struct {
     const uint8_t *data; size_t n;
-    uint32_t *out; size_t nout;
-    double c; int prebits, err, fast, carry;
+    uint32_t *out; size_t nout;          /* starts (always) */
+    uint32_t *out_e, *out_i; size_t ne, ni;   /* ids mode only */
+    double c; int prebits, err, fast, carry, want_ids;
 } BJob;
 typedef struct { BJob *jobs; int njobs; atomic_int next; } BPool;
 
-static void *bworker(void *argp) {
-    BPool *p = (BPool *)argp;
+/* free a batch job's output arrays (all three in ids mode) */
+static void batch_job_free(BJob *j) {
+    free(j->out); free(j->out_e); free(j->out_i);
+    j->out = NULL; j->out_e = NULL; j->out_i = NULL;
+}
+
+static void *bworker(void *argp) {    BPool *p = (BPool *)argp;
     for (;;) {
         int idx = atomic_fetch_add(&p->next, 1);
         if (idx >= p->njobs) break;
         BJob *j = &p->jobs[idx];
-        RcCore *core = core_new(j->c, 0, PF_DEFAULT, j->prebits,
+        /* ids mode needs the book (intern) and all three output vectors;
+         * starts-only mode stays book-off (the cheaper spans producer) */
+        RcCore *core = core_new(j->c, j->want_ids, PF_DEFAULT, j->prebits,
                                 MAP_CAPBITS_DEFAULT, j->fast, j->carry, 0, 1);
         if (!core) { j->err = 1; continue; }
-        OutVec ov; ov_init(&ov);
-        int rc = core_run(core, j->data, j->n, 1, NULL, &ov, NULL, NULL);
-        if (rc == 0) rc = core_flush(core, &ov, NULL, NULL);
-        if (rc == 0) { j->out = ov.a; j->nout = ov.n; }
-        else { j->err = 1; ov_free(&ov); }
+        OutVec ov, ove, ovi;
+        ov_init(&ov); ov_init(&ove); ov_init(&ovi);
+        int rc = core_run(core, j->data, j->n, 1, NULL, &ov,
+                          j->want_ids ? &ove : NULL,
+                          j->want_ids ? &ovi : NULL);
+        if (rc == 0)
+            rc = core_flush(core, &ov, j->want_ids ? &ove : NULL,
+                            j->want_ids ? &ovi : NULL);
+        if (rc == 0) {
+            j->out = ov.a; j->nout = ov.n;
+            if (j->want_ids) {
+                j->out_e = ove.a; j->ne = ove.n;
+                j->out_i = ovi.a; j->ni = ovi.n;
+            }
+        } else {
+            j->err = 1; ov_free(&ov); ov_free(&ove); ov_free(&ovi);
+        }
         core_free(core);
     }
     return NULL;
@@ -1708,10 +1731,12 @@ static void *bworker(void *argp) {
 static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *docs;
     double c = 20.0;
-    int threads = 0, fz = 0, carry = 0;
-    static char *kwlist[] = {"docs", "c", "threads", "fast", "carry", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|diii", kwlist,
-                                     &docs, &c, &threads, &fz, &carry))
+    int threads = 0, fz = 0, carry = 0, ids = 0;
+    static char *kwlist[] = {"docs", "c", "threads", "fast", "carry",
+                             "ids", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|diiii", kwlist,
+                                     &docs, &c, &threads, &fz, &carry,
+                                     &ids))
         return NULL;
     PyObject *fast = PySequence_Fast(docs, "docs must be a sequence");
     if (!fast) return NULL;
@@ -1738,6 +1763,7 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
         jobs[k].c = c;
         jobs[k].fast = fz;
         jobs[k].carry = carry ? 1 : 0;
+        jobs[k].want_ids = ids ? 1 : 0;
         size_t n = jobs[k].n;
         int bits = 12;
         while ((1ull << bits) < 6 * n && bits < 23) bits++;
@@ -1768,7 +1794,7 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *out = PyList_New(nd);
     if (!out) {
         for (Py_ssize_t k = 0; k < nd; k++) PyBuffer_Release(&views[k]);
-        for (Py_ssize_t k = 0; k < nd; k++) free(jobs[k].out);
+        for (Py_ssize_t k = 0; k < nd; k++) batch_job_free(&jobs[k]);
         free(views); free(jobs); Py_DECREF(fast);
         return NULL;
     }
@@ -1776,24 +1802,38 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
         if (jobs[k].err) {
             Py_DECREF(out);
             for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
-            for (Py_ssize_t q = 0; q < nd; q++) free(jobs[q].out);
+            for (Py_ssize_t q = 0; q < nd; q++) batch_job_free(&jobs[q]);
             free(views); free(jobs); Py_DECREF(fast);
             PyErr_SetString(RatecError, "batch job failed (OOM?)");
             return NULL;
         }
-        PyObject *b = PyBytes_FromStringAndSize(
-            (const char *)jobs[k].out, (Py_ssize_t)(jobs[k].nout * 4));
+        PyObject *b = NULL;
+        if (jobs[k].want_ids) {
+            PyObject *bs = PyBytes_FromStringAndSize(
+                (const char *)jobs[k].out, (Py_ssize_t)(jobs[k].nout * 4));
+            PyObject *be = bs ? PyBytes_FromStringAndSize(
+                (const char *)jobs[k].out_e, (Py_ssize_t)(jobs[k].ne * 4))
+                : NULL;
+            PyObject *bi = be ? PyBytes_FromStringAndSize(
+                (const char *)jobs[k].out_i, (Py_ssize_t)(jobs[k].ni * 4))
+                : NULL;
+            if (bi) b = PyTuple_Pack(3, bs, be, bi);   /* increfs items */
+            Py_XDECREF(bs); Py_XDECREF(be); Py_XDECREF(bi);
+        } else {
+            b = PyBytes_FromStringAndSize(
+                (const char *)jobs[k].out, (Py_ssize_t)(jobs[k].nout * 4));
+        }
         if (!b) {
             Py_DECREF(out);
             for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
-            for (Py_ssize_t q = 0; q < nd; q++) free(jobs[q].out);
+            for (Py_ssize_t q = 0; q < nd; q++) batch_job_free(&jobs[q]);
             free(views); free(jobs); Py_DECREF(fast);
             return NULL;
         }
         PyList_SET_ITEM(out, k, b);
     }
     for (Py_ssize_t k = 0; k < nd; k++) PyBuffer_Release(&views[k]);
-    for (Py_ssize_t k = 0; k < nd; k++) free(jobs[k].out);
+    for (Py_ssize_t k = 0; k < nd; k++) batch_job_free(&jobs[k]);
     free(views); free(jobs); Py_DECREF(fast);
     return out;
 }
@@ -1851,10 +1891,13 @@ static PyObject *rc_version(PyObject *self, PyObject *Py_UNUSED(ig)) {
 static PyMethodDef rc_methods[] = {
     {"batch", (PyCFunction)(void (*)(void))rc_batch,
      METH_VARARGS | METH_KEYWORDS,
-     "batch(docs, c=20, threads=0, fast=False, carry=False) -> [starts_bytes, ...]\n"
+     "batch(docs, c=20, threads=0, fast=False, carry=False, ids=False)\n"
      "Encode many independent documents in parallel (GIL released, one cold\n"
-     "engine per doc). Each entry is a little-endian uint32 array of patch\n"
-     "starts (patch k = [start_k, start_{k+1}))."},
+     "engine per doc). ids=False: each entry is a little-endian uint32 array\n"
+     "of patch starts (patch k = [start_k, start_{k+1})). ids=True: each\n"
+     "entry is (starts, ends, ids) as a tuple of little-endian uint32 arrays\n"
+     "— thread-parallel LM-prep tokens; lens = ends - starts; ids need the\n"
+     "book (store_book semantics per doc, spans unaffected)."},
     {"patch_from_sur", (PyCFunction)(void (*)(void))rc_patch_from_sur,
      METH_VARARGS | METH_KEYWORDS,
      "patch_from_sur(sur_f32le, c, carry=False) -> starts_bytes (uint32 LE)\n"

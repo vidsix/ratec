@@ -69,9 +69,9 @@ def main():
                        for d in DOMAINS},
         "steps": STEPS,
     }
-    rec.update(record_envelope(
+    rec["protocol"].update(record_envelope(
         inputs={os.path.relpath(CKPT, os.path.dirname(RUNS)):
-                str(os.path.getsize(CKPT))},
+                os.path.relpath(CKPT, os.path.dirname(os.path.dirname(RUNS)))},
         deps=("torch",)))
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "ablations.json")

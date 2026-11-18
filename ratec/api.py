@@ -477,4 +477,31 @@ def batch_spans(docs: Sequence, c: float = 20, threads: int = 0,
             for raw, d in zip(raws, docs)]
 
 
+def batch_encode(docs: Sequence, c: float = 20, threads: int = 0,
+                 fast: bool = False, carry: bool = False):
+    """Thread-parallel LM-prep tokenization of independent byte documents.
+
+    Returns a list of (ids ndarray int32, lens ndarray int32) per doc:
+    `ids` are book ids (single-byte patches carry their raw byte value,
+    multi-byte patches are book ids — the shipped packed-stream content
+    semantics), `lens` the per-token byte lengths (ends - starts; the
+    spans tile each doc exactly). Each doc is encoded cold-start and
+    independently — identical ids to `RateC(c=c).encode_to_spans(doc)`
+    per doc, with all cores working in parallel (the GIL is released).
+    For one long stream prefer a single `RateC` engine (its judge stays
+    warm across the whole stream); for many small/medium docs this is
+    the fastest path to training-ready tokens.
+    """
+    raws = _rc.batch([bytes(d) for d in docs], c=float(c), threads=threads,
+                     fast=bool(fast), carry=bool(carry), ids=True)
+    out = []
+    for starts_b, ends_b, ids_b in raws:
+        starts = np.frombuffer(starts_b, dtype=np.uint32)
+        ends = np.frombuffer(ends_b, dtype=np.uint32)
+        ids = np.frombuffer(ids_b, dtype=np.uint32)
+        out.append((ids.astype(np.int32),
+                    ends.astype(np.int32) - starts.astype(np.int32)))
+    return out
+
+
 __version__ = _rc.version()

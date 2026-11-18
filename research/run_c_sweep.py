@@ -34,7 +34,11 @@ sys.path.insert(0, ROOT)
 from research.record_util import record_envelope, write_record  # noqa: E402
 
 RUNS = os.environ.get("RATEC_RUNS", os.path.join(ROOT, "runs"))
-SWEEP = [8, 10, 12]
+# RATEC_SWEEP env override (v0.8 extension: RATEC_SWEEP=14 chases the
+# pre-registered "optimum lies above the swept range" direction; the
+# extension's own interpretation is registered below, before any run)
+SWEEP = [int(x) for x in
+         os.environ.get("RATEC_SWEEP", "8,10,12").split(",") if x.strip()]
 STEPS = 2400
 RECORD = os.path.join(ROOT, "research", "lm_c_sweep.json")
 PRE_REGISTERED = [
@@ -74,6 +78,20 @@ def load_record():
                        "train_bytes": 15_811_609, "val_bytes": 659_473},
             "interpretations_pre_registered": PRE_REGISTERED,
         },
+        "extension_v0_8": {
+            "what": "C=14 arm added via RATEC_SWEEP=14 — chases the "
+                    "C=12-edge direction without touching the v0.7 "
+                    "protocol or its recorded rows",
+            "pre_registered_utc": None,   # filled on first extension run
+            "interpretations_pre_registered": [
+                "C=14 below C=12's 3.3804 -> interior optimum inside "
+                "{12,14}; stated with its C and BPB;",
+                "C=14 at/above 3.3804 -> the direction continues; stated "
+                "as a direction, never extrapolated;",
+                "the param-count confound grows again (256+9*2^14 rows) "
+                "and is reported per run.",
+            ],
+        },
         "rows": {},
         "status": {"runs_complete": 0, "runs_total": len(SWEEP)},
     }
@@ -93,6 +111,20 @@ def rewrite(rec):
 
 def main():
     rec = load_record()
+    if not rec.get("extension_v0_8"):
+        rec["extension_v0_8"] = {
+            "what": "C=14 arm added via RATEC_SWEEP=14",
+            "pre_registered_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                time.gmtime()),
+            "interpretations_pre_registered": [
+                "C=14 below C=12's 3.3804 -> interior optimum inside "
+                "{12,14}; stated with its C and BPB;",
+                "C=14 at/above 3.3804 -> the direction continues; stated "
+                "as a direction, never extrapolated;",
+                "the param-count confound grows again (256+9*2^14 rows) "
+                "and is reported per run.",
+            ],
+        }
     print(f"[c_sweep] runs complete: {rec['status']['runs_complete']}"
           f"/{rec['status']['runs_total']}", flush=True)
     for c in SWEEP:
