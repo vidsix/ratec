@@ -111,6 +111,8 @@ def rewrite(rec):
 
 def main():
     rec = load_record()
+    rec.setdefault("status", {})["runs_total"] = max(
+        int(rec["status"].get("runs_total", 0)), len(SWEEP))
     if not rec.get("extension_v0_8"):
         rec["extension_v0_8"] = {
             "what": "C=14 arm added via RATEC_SWEEP=14",

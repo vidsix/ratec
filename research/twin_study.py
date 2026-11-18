@@ -160,7 +160,9 @@ class TwinLM(nn.Module):
         lidx = torch.where(ids < 256, torch.zeros_like(ids), 1 + (ids - 256) // m)
         return content, lidx
 
-    def forward(self, idx, lens=None):
+    def trunk(self, idx, lens=None):
+        """Everything up to (and including) the final LayerNorm — the
+        cheap part; the head is applied per-chunk when the vocab is big."""
         T = idx.shape[1]
         pos = torch.arange(T, device=idx.device)
         if self.kind == "ratec":
@@ -170,7 +172,10 @@ class TwinLM(nn.Module):
             x = self.emb(idx) + self.pos(pos)[None]
         for b in self.blocks:
             x = b(x)
-        return self.head(self.lnf(x))
+        return self.lnf(x)
+
+    def forward(self, idx, lens=None):
+        return self.head(self.trunk(idx, lens))
 
 
 def n_params(m):
@@ -366,8 +371,36 @@ def main():
             xl = (torch.from_numpy(np.stack(
                 [tr_lens[o:o + args.ctx] for o in offs]).astype(np.int64))
                 if args.lens_lidx else None)
-            logits = model(x, xl)
-            loss = F.cross_entropy(logits.reshape(-1, model.vocab), y.reshape(-1))
+            feats = model.trunk(x, xl)
+            # chunked + gradient-checkpointed cross-entropy over the time
+            # dimension: the logits tensor is batch*ctx*vocab*4B (2.4 GB
+            # at C=14's 147,712-row head — a global OOM on a 3 GB box).
+            # The trunk output is tiny (batch*ctx*d); each chunk's logits
+            # are recomputed during backward (checkpoint), so peak memory
+            # holds ONE chunk's logits. Identical math to full-batch CE:
+            # equal-size chunks' sum-CE over y.numel() is the same mean,
+            # differing only in float summation order (deterministic for
+            # a fixed seed). C <= 11 keeps the original unchunked path,
+            # so recorded rows are unaffected; big-vocab rows (C=12+)
+            # land within float noise of the unchunked numbers.
+            if model.vocab > 32768:
+                import torch.utils.checkpoint as cp
+                Tc = 16
+                ce_chunks = []
+                for tc0 in range(0, feats.shape[1], Tc):
+                    fc = feats[:, tc0:tc0 + Tc]
+                    yc = y[:, tc0:tc0 + Tc]
+                    ce_chunks.append(cp.checkpoint(
+                        lambda f, yy: F.cross_entropy(
+                            model.head(f).reshape(-1, model.vocab),
+                            yy.reshape(-1),
+                            reduction="sum"),
+                        fc, yc, use_reentrant=False))
+                loss = torch.stack(ce_chunks).sum() / y.numel()
+            else:
+                logits = model.head(feats)
+                loss = F.cross_entropy(logits.reshape(-1, model.vocab),
+                                       y.reshape(-1))
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

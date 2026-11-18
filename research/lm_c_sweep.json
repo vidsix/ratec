@@ -25,29 +25,19 @@
    "numpy": "2.1.3",
    "torch": "2.15.0+cpu"
   },
-  "git_rev": "f9ed436",
+  "git_rev": "466640f",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-18T15:00:01+00:00",
+  "created_utc": "2026-11-18T17:42:12+00:00",
   "inputs": {
-   "streams_manifest_c8": {
-    "sha256": "f891db087557b8ad752292862f320ae2a16dbae5b522f9426eccd57dee42f709",
-    "path": "/home/z/my-project/runs/streams_manifest_c8.json",
-    "bytes": 4099
-   },
-   "streams_manifest_c10": {
-    "sha256": "91059d08159d381865f0ae58f4646f1f548b110d7123fdcee9401bbfc332bff5",
-    "path": "/home/z/my-project/runs/streams_manifest_c10.json",
-    "bytes": 4117
-   },
-   "streams_manifest_c12": {
-    "sha256": "16273e78d8625244d2a46a79f8991f35efee26fb90ce976c08f55c714dd371ea",
-    "path": "/home/z/my-project/runs/streams_manifest_c12.json",
-    "bytes": 4115
+   "streams_manifest_c14": {
+    "sha256": "aca2129057305310158b23b5bc4064715fa67c0aa4229331e981cf8b32733da0",
+    "path": "/home/z/my-project/runs/streams_manifest_c14.json",
+    "bytes": 4111
    }
   }
  },
@@ -104,6 +94,15 @@
  "status": {
   "runs_complete": 3,
   "runs_total": 3,
-  "updated_utc": "2026-11-18T15:00:01Z"
+  "updated_utc": "2026-11-18T17:42:10Z"
+ },
+ "extension_v0_8": {
+  "what": "C=14 arm added via RATEC_SWEEP=14",
+  "pre_registered_utc": "2026-11-18T17:42:06Z",
+  "interpretations_pre_registered": [
+   "C=14 below C=12's 3.3804 -> interior optimum inside {12,14}; stated with its C and BPB;",
+   "C=14 at/above 3.3804 -> the direction continues; stated as a direction, never extrapolated;",
+   "the param-count confound grows again (256+9*2^14 rows) and is reported per run."
+  ]
  }
 }
