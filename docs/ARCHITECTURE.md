@@ -67,8 +67,15 @@ bytes ──judge──> per-byte surprisal ──patcher──> spans (start,en
    head" is not an ablation here — it is structurally what the
    interface is. An ablation zeroing the length field measured
    **−0.172 BPB** (the length field contributes); per-domain ordering
-   zh/code-first. Frozen trainer protocol: d=96, 3 layers, 4 heads,
-   ctx 256, batch 16, lr 3e-4 OneCycle, seed 42, 2400 steps.
+   zh/code-first. The ladder (`research/twin_ladder.json`) records the
+   honest architecture comparison: at 2400 steps the tied interface
+   trails the untied factorized arm (`ratec`) by 0.006 BPB and the gap
+   inverts past that rung — **3.5270 (tied) vs 3.5214 (factorized) at
+   4800** — so the shipped `ratec_direct` is the simplicity winner, not
+   the BPB winner at larger budgets; the sweep and the doc say so
+   rather than quietly preferring the home arm.
+   Frozen trainer protocol: d=96, 3 layers, 4 heads, ctx 256, batch 16,
+   lr 3e-4 OneCycle, seed 42, 2400 steps.
 
 ## The invariants (what the gates enforce)
 
