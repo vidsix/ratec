@@ -239,12 +239,12 @@ static int book_grow_hash(Book *b) {
     return 0;
 }
 /* returns id, or ID_NONE on allocation failure (b->err set) */
-static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
+static uint32_t book_intern_h(Book *b, const uint8_t *p, size_t len,
+                              uint64_t h) {
     if (b->err) return ID_NONE;
     if ((b->n + 1) * 2 >= (1ull << b->capbits)) {
         if (book_grow_hash(b) < 0) { b->err = 1; return ID_NONE; }
     }
-    uint64_t h = fnv1a64(p, len);
     uint64_t i = h & b->mask;
     while (b->hv[i]) {
         uint32_t id = b->hv[i] - 1;
@@ -283,6 +283,12 @@ static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
     if (b->cnt) b->cnt[b->n] = 1;
     b->n++;
     return (uint32_t)(b->n - 1);
+}
+
+/* general entry: callers without a rolling hash (book rebuild on
+ * snapshot save/load, decode-side table construction) */
+static uint32_t book_intern(Book *b, const uint8_t *p, size_t len) {
+    return book_intern_h(b, p, len, fnv1a64(p, len));
 }
 
 /* book_prune: drop entries whose since-last-prune count is below minc
@@ -384,6 +390,13 @@ typedef struct {
     double   cs;                 /* running prefix sum == cs[nseen]       */
     double   lim;                /* cs_at_open + C                        */
     uint8_t *obuf; size_t ocap;  /* open-patch byte buffer (book mode)    */
+    uint64_t oh;                 /* rolling fnv1a64 of the open patch —
+                                    derived state, not serialized: the
+                                    same value fnv1a64 would return over
+                                    obuf[0..open_len), maintained O(1)
+                                    per extension byte so book_intern
+                                    stops re-hashing the whole patch at
+                                    every close (the ids path's hot spot) */
 
     uint64_t nseen;              /* absolute bytes processed              */
     uint64_t n_forced, n_patches;
@@ -490,6 +503,7 @@ static void core_reset_keep(RcCore *e) {
     }
     e->tmap.n = 0; e->cmap.n = 0;
     e->patch_open = 0; e->open_start = 0; e->open_len = 0;
+    e->oh = 0xcbf29ce484222325ull;
     e->cs = 0.0; e->lim = 0.0; e->carry = 0.0;
     e->nseen = 0; e->n_forced = 0; e->n_patches = 0;
     e->n_pruned = 0;
@@ -592,11 +606,11 @@ static inline float rc_log2_fast(double x) {
 static inline __attribute__((always_inline)) int
 emit_patch(OutVec *ovs, OutVec *ove, OutVec *ovi, int store_book, Book *bk,
            uint64_t st, uint64_t en, const uint8_t *ct, size_t cl,
-           size_t *npatch) {
+           uint64_t h, size_t *npatch) {
     if (st > 0xFFFFFFFFull || en > 0xFFFFFFFFull) return -2;
     uint32_t id_ = ID_NONE;
     if (ovi && store_book) {
-        id_ = book_intern(bk, ct, cl);
+        id_ = book_intern_h(bk, ct, cl, h);
         if (id_ == ID_NONE) return -1;
     }
     if (ovs && ov_push(ovs, (uint32_t)st) < 0) return -1;
@@ -633,6 +647,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
     double cs = e->cs, lim = e->lim;
     int patch_open = e->patch_open;
     uint64_t open_start = e->open_start, open_len = e->open_len;
+    uint64_t oh = e->oh;                 /* rolling open-patch fnv hash */
     uint8_t *obuf = e->obuf; size_t ocap = e->ocap;
     const int sbook = e->store_book;
     uint64_t pos0 = e->nseen;
@@ -727,6 +742,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                 open_start = pos0 + i;
                 lim = CAR ? cs + Cloc + carry : cs + (double)Cloc;
                 patch_open = 1; open_len = 0;
+                oh = 0xcbf29ce484222325ull;      /* fnv offset basis */
             }
             if (cnext <= lim) {
                 cs = cnext;
@@ -739,11 +755,16 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     }
                     obuf[open_len] = b;
                 }
+                oh = (oh ^ b) * 0x100000001b3ull; /* fnv step (content joins
+                                                     the patch even when the
+                                                     buffer is not stored) */
                 open_len++; i++;
             } else if (open_len == 0) {          /* forced single byte */
                 frc++;
                 {   const int erc = emit_patch(ovs, ove, ovi, sbook, &e->book,
-                                   open_start, pos0 + i + 1, &b, 1, &npatch);
+                                   open_start, pos0 + i + 1, &b, 1,
+                                   (0xcbf29ce484222325ull ^ b)
+                                     * 0x100000001b3ull, &npatch);
                     if (erc) { rc = erc; goto done; }
                 }
                 if (maybe_prune(e, pos0 + i + 1)) { rc = -1; goto done; }
@@ -752,7 +773,7 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
             } else {                             /* close, then byte i */
                 int erc_ = emit_patch(ovs, ove, ovi, sbook, &e->book,
                                       open_start, pos0 + i, obuf, open_len,
-                                      &npatch);
+                                      oh, &npatch);
                 if (erc_) { rc = erc_; goto done; }
                 if (maybe_prune(e, pos0 + i)) { rc = -1; goto done; }
                 patch_open = 0; open_len = 0;
@@ -767,12 +788,18 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                 if (cnext <= lim) {
                     cs = cnext;
                     if (sbook) obuf[0] = b;
+                    oh = (0xcbf29ce484222325ull ^ b)   /* new patch, first
+                                                          byte joins it */
+                       * 0x100000001b3ull;
                     open_len = 1; i++;
                 } else {
                     frc++;
                     {   const int erc = emit_patch(ovs, ove, ovi, sbook,
                                                    &e->book, open_start,
-                                                   pos0 + i + 1, &b, 1, &npatch);
+                                                   pos0 + i + 1, &b, 1,
+                                                   (0xcbf29ce484222325ull ^ b)
+                                                     * 0x100000001b3ull,
+                                                   &npatch);
                         if (erc) { rc = erc; goto done; }
                     }
                     if (maybe_prune(e, pos0 + i + 1)) { rc = -1; goto done; }
@@ -804,6 +831,7 @@ done:
     e->cs = cs; e->lim = lim; e->patch_open = patch_open;
     e->carry = carry;
     e->open_start = open_start; e->open_len = open_len;
+    e->oh = oh;
     e->obuf = obuf; e->ocap = ocap;
     e->nseen = pos0 + i;
     e->n_forced += (uint64_t)frc;
@@ -830,7 +858,7 @@ static int core_flush(RcCore *e, OutVec *ovs, OutVec *ove, OutVec *ovi) {
     if (e->open_start > 0xFFFFFFFFull || e->nseen > 0xFFFFFFFFull) return -2;
     uint32_t id_ = ID_NONE;
     if (ovi && e->store_book) {
-        id_ = book_intern(&e->book, e->obuf, (size_t)e->open_len);
+        id_ = book_intern_h(&e->book, e->obuf, (size_t)e->open_len, e->oh);
         if (id_ == ID_NONE) return -1;
     }
     if (ovs && ov_push(ovs, (uint32_t)e->open_start) < 0) return -1;
@@ -1060,6 +1088,13 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         if (rd_get(&r, ob, (size_t)e->open_len)) { free(ob); goto fail; }
         free(e->obuf); e->obuf = ob; e->ocap = (size_t)e->open_len;
     }
+    /* rolling open-patch hash is derived, not serialized: recompute it
+     * from the restored content (bit-identical to a from-scratch fnv1a64,
+     * so snapshot bytes stay format v2..v7 unchanged). Book-off engines
+     * never intern, so their placeholder value is never consumed. */
+    e->oh = (e->store_book && e->patch_open && e->open_len)
+          ? fnv1a64(e->obuf, (size_t)e->open_len)
+          : 0xcbf29ce484222325ull;
     if (rd_get(&r, e->cnt0, sizeof e->cnt0)) goto fail;
     if (rd_get(&r, e->cnt1, 256 * 256 * 4) || rd_get(&r, e->tot1, 256 * 4) ||
         rd_get(&r, e->tot2, 65536 * 4)) goto fail;

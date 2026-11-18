@@ -30,20 +30,26 @@ Measured cost structure (knob sweep, 2 MB warm):
 
 Levers, in expected-value order:
 
-1. **Incremental judge memoization** (the big one). Cost scales with
-   close count (the c=8 datapoint); consecutive closes re-evaluate
-   overlapping substrings of the same open patch. Memoize per-open-patch
-   judge lookups (keyed by substring span) — same decisions, cached
-   evaluations. Bit-exactness is provable: the gate compares spans/ids/
-   snapshots byte-for-byte; the memo changes nothing but recomputation.
-   Expected: 1.5–3× on patch-heavy text; most at low C (where the sweep
-   arms live).
-2. **`batch_spans` on book-on engines.** Book-on == book-off spans
-   (verified: identical on corpus samples), and book-on is 2× faster
-   per doc. The GIL is already released in the batch worker, so this
-   multiplies: ~10 MB/s on this 2-core box (tiktoken parity), ~linear
-   in cores beyond. Flag-gated (`book=True` default in v0.8 — output
-   contract unchanged, equality gated in tests).
+1. ~~judge memoization~~ **RETRACTED — already built into the engine**,
+   twice over: the judge slots carry inline 16-entry windows (one 64-byte
+   cache line per hot context = the memo), and the judge's counts update
+   every byte, so an external memo would be stale (not bit-exact). The
+   lever that DID land instead: **incremental open-patch hashing** —
+   book_intern re-ran fnv1a64 over the whole patch content at every
+   close; the engine now maintains the rolling hash per extension byte
+   (identical value by the fnv recurrence — bit-exact by construction,
+   proven by the full gate battery: 9/9 with pinned id/span fixtures,
+   snapshot round-trips unchanged). Measured on the 2 MB corpus mix,
+   ids path (LM data prep): warm 4.1 → 6.6 MB/s (+61%), cold 1.8 →
+   4.9 MB/s (+172%); book-on now matches book-off. Honest cost
+   attribution: judge-only 9.6 MB/s ≈ tiktoken 9.8 — the KT judge core
+   is at parity; the remaining ids-path gap is patcher bookkeeping, not
+   prediction.
+2. ~~batch on book-on engines~~ **RETRACTED after controlled
+   re-measurement**: the original "book-on 2× faster" was a warm-vs-cold
+   artifact (fresh engine per iteration vs a warmed one). Book-off is
+   actually FASTER (no obuf/intern work), and the batch worker already
+   pre-sizes its maps demand-style. The real lever found instead:
 3. **`reserve=` pre-sizing** for known-scale jobs. Cold-start tax is
    26–50% (book arena realloc + judge map growth); a size hint kills
    the growth chain. Composes with `warm_state` (v0.4.1).
