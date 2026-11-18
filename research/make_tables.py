@@ -104,10 +104,33 @@ def render_ladder(rec):
     return "\n".join(lines) + "\n"
 
 
+def render_c_sweep(rec):
+    """The LM-optimal C sweep (PLAN_v0.7 P3 + the v0.8 extension): BPB at
+    each C, with the param count as the explicit budget confound."""
+    rows = rec.get("rows", {})
+    cs = sorted(int(k) for k in rows)
+    lines = ["| C | head rows | params | final BPB | bytes/token |",
+             "|---|---|---|---|---|"]
+    for c in cs:
+        e = rows[str(c)]
+        head = 256 + 9 * (1 << c)
+        lines.append("| %d | %d | %s | %.4f | %.2f |" % (
+            c, head, format(e["params"], ","), e["final_bpb_overall"],
+            e.get("bytes_per_token", 0.0)))
+    lines.append("")
+    lines.append(
+        "The sweep compares budgets, not parameter-matched models — head "
+        "rows grow as 256 + 9·2^C and the record states that confound per "
+        "row. The v0.8 C=14 arm is a pre-registered extension chasing the "
+        "C=12-edge direction (`research/lm_c_sweep.json`, extension block).")
+    return "\n".join(lines) + "\n"
+
+
 TABLES = {
     "scale": ("research/scale_mix15.8MB.json", render_scale),
     "fertility": ("research/bench_tiktoken.json", render_fertility),
     "ladder": ("research/twin_ladder.json", render_ladder),
+    "c_sweep": ("research/lm_c_sweep.json", render_c_sweep),
 }
 
 

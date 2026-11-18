@@ -258,6 +258,19 @@ above 600 was trained. BPB by arm at each rung, plus the headline gap:
 Gap slope: **0.179 BPB per log2-doubling** (least squares over the 4 completed rungs; the gap narrows with training scale).
 <!-- /table:ladder -->
 
+The LM-optimal C sweep (the one knob, downstream):
+
+<!-- table:c_sweep generated from research/lm_c_sweep.json — do not edit; run make tables -->
+| C | head rows | params | final BPB | bytes/token |
+|---|---|---|---|---|
+| 8 | 2560 | 606,048 | 3.5279 | 2.11 |
+| 10 | 9472 | 1,269,600 | 3.4451 | 2.68 |
+| 12 | 37120 | 3,923,808 | 3.3804 | 3.32 |
+
+The sweep compares budgets, not parameter-matched models — head rows grow as 256 + 9·2^C and the record states that confound per row. The v0.8 C=14 arm is a pre-registered extension chasing the C=12-edge direction (`research/lm_c_sweep.json`, extension block).
+<!-- /table:c_sweep -->
+
+
 Record with per-domain numbers, provenance envelope and the pre-registered
 interpretations: `research/twin_ladder.json`; narrative and the fit:
 `docs/twin_study.md`.
