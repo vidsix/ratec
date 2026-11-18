@@ -1,0 +1,47 @@
+{
+ "protocol": {
+  "what": "length-field contribution ablation, ratec@2400 (eval-only; el.weight zeroed at eval)",
+  "checkpoint": "runs/twin_ratec_l2400.ckpt",
+  "interpretation": "delta ~ 0 => the factorized arm's length field is not yet contributing at probe scale; its small-scale BPB carries a trainable-in-longer component"
+ },
+ "control_bpb": 3.7774342057373285,
+ "zeroed_bpb": 3.949190029228579,
+ "delta_bpb": 0.1717558234912504,
+ "per_domain": {
+  "en": {
+   "control": 3.6850635906906013,
+   "zeroed": 3.785729085920704
+  },
+  "hr": {
+   "control": 3.838482846226139,
+   "zeroed": 3.9110393628590487
+  },
+  "zh": {
+   "control": 3.93660346097171,
+   "zeroed": 4.281016412437323
+  },
+  "code": {
+   "control": 3.787895203274177,
+   "zeroed": 4.023248391546997
+  }
+ },
+ "steps": 2400,
+ "ratec_version": "0.7.0",
+ "deps": {
+  "torch": "2.15.0+cpu"
+ },
+ "git_rev": "f95db3d",
+ "host": {
+  "python": "3.12.16",
+  "machine": "x86_64",
+  "cpu_count": 2,
+  "cpu_model": "Intel(R) Xeon(R) Processor"
+ },
+ "created_utc": "2026-11-18T15:45:30+00:00",
+ "inputs": {
+  "runs/twin_ratec_l2400.ckpt": {
+   "path": "16922380",
+   "missing": true
+  }
+ }
+}

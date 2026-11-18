@@ -76,21 +76,22 @@ controlled:
    producer, commit 5f6430b); all arms now share the exact same fixed
    table. The ladder records themselves were always clean (v_eff 9472
    everywhere, verified from records).
-2. **Untied-head tax on the factorized arm.** `ratec` (factorized) trains
-   an untied head from scratch where bpe/bytes/ratec_direct tie theirs;
-   at short training that asymmetry costs the factorized arm BPB it
-   wouldn't pay at scale (the ladder already shows the cost vanishing:
-   ratec ≤ ratec_direct from 1200 steps on). v0.8 runs one controlled
-   ablation (tied-head variant of the factorized arm, 2400 steps) to
-   quantify it — expectation: small and shrinking, but it must be
-   measured, not assumed.
-3. **Length-field learning.** The factorized input spends 12 rows @32 on
-   the length field; at 600 steps those rows are barely trained (the
-   in_proj must learn to USE them). Ablation: zero-out the length field
-   at eval (BPB delta) to see whether it is contributing yet; if not,
-   the factorized arm's small-scale numbers carry a trainable-in- longer
-   component the other arms don't have — worth one paragraph in the doc,
-   possibly a warm-start rung.
+2. **Untied-head tax on the factorized arm — CLOSED, structurally
+   impossible to tie.** The head operates on 9472 packed ids while the
+   input embedding is over 1280 content rows — there is no shared table,
+   so "tie the head" is not an ablation but a different architecture
+   (that IS ratec_direct, already on the ladder). The untied head is the
+   factorized interface's price, already priced into the measured trend
+   (ratec ≤ ratec_direct from 1200 steps on) — no further run needed.
+3. **Length-field learning — DONE, positive** (`research/
+   ablate_lenfield.py` → `research/ablations.json`): eval-only ablation
+   on the ratec@2400 checkpoint (control reproduces the record's 3.7774
+   exactly). Zeroing the length embedding costs +0.1718 BPB overall —
+   the length field ALREADY contributes materially at probe scale, and
+   domain-structured as designed: zh +0.344, code +0.235, en +0.101,
+   hr +0.073 (the high-fertility-variance domains lean on it hardest).
+   The "dormant component" caveat is refuted; the factorized
+   architecture is learning what it was built to learn.
 
 ## P3 — robustness (falling-out parts)
 
