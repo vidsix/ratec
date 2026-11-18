@@ -1,10 +1,13 @@
 """P3.2 (PLAN_v0.8): speed regression floor.
 
 Loose floor on the ids path (the LM data-prep path) with the rolling-
-hash intern landed: catches accidental pessimization (e.g. a revert to
-per-close full re-hashing, which measured 4.1 MB/s warm vs 6.6 after
-the fix) without flaking on loaded machines. 512 KB sample keeps the
-judge map allocation unit-test-sized.
+hash intern and merged book slots landed: catches accidental
+pessimizations (e.g. a revert to per-close full re-hashing, which
+measured 4.1 MB/s warm before the fix vs 7.4 after) without flaking on
+loaded machines — the floor stays 2.5 because a concurrently running
+benchmark or training job can halve the observed number (measured range
+under load: 3.3-9.5 MB/s on this very sample; unloaded it is stable
+around 7). 512 KB sample keeps the judge map allocation unit-test-sized.
 """
 import os
 import sys

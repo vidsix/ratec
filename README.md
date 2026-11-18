@@ -37,7 +37,8 @@ tok.decode(ids)                          # -> "hello 你好!"  (round-trips)
 
 tok.encode_to_spans(b"...")              # [(start, end, id|None), ...]
 tok.surprise(b"...")                     # per-byte float32 surprisal
-ratec.batch_spans(docs, c=20, threads=N) # parallel bulk encoding
+ratec.batch_spans(docs, c=20, threads=N) # parallel bulk encoding (spans)
+ratec.batch_encode(docs, c=20, threads=N) # parallel LM-prep tokens: (ids, lens) per doc
 ratec.RateC(c=20, exact=False)           # fast lane (poly log2, ~1 ulp)
 ratec.RateC(c=20, store_book=False)      \
     .encode_stream_parallel(             # ONE stream on many cores
@@ -295,9 +296,18 @@ RateC buys instead, per byte:
 <!-- /table:fertility -->
 
 plus: no vocab file, any C at runtime, byte-native multimodality, and
-real multi-core throughput via `batch_spans` (independent docs) and
-`encode_stream_parallel` (one stream, chunked from a snapshot — measured
-in this sandbox at ~1.7× on 2 threads for the parallel section, scaling
+real multi-core throughput via `batch_spans` / `batch_encode`
+(independent docs) and `encode_stream_parallel` (one stream, chunked
+from a snapshot — measured in this sandbox at ~1.7× on 2 threads for
+the parallel section, scaling
+
+Ids-path speed (LM data prep with book ids; the numbers behind
+`docs/ARCHITECTURE.md`): **5.5 MB/s cold / 7.4 MB/s warm** single
+engine after the rolling-hash intern and merged book slots — up from
+1.8 / 4.1 at the cycle's start. Single-threaded `batch_encode` on many
+docs matches this per-doc; on 2 threads it exceeded the single-engine
+warm rate in aggregate. Architecture, invariants and the defaults
+audit: `docs/ARCHITECTURE.md`.
 with cores on real machines). The honest verdict: exact RateC does ~100×
 more arithmetic per byte than a merge lookup and currently trades speed
 for compression; the fast lane and the profiler roadmap below are the
@@ -325,10 +335,12 @@ paths to raw speed.
    `docs/twin_study.md` + `research/`. **Training-scale probe (4× steps,
    post-v0.4.1):** the gap narrows 1.684 → 1.212 BPB (−28.1%); RateC
    improves 1.94× more than BPE for the same extra compute, in every
-   domain. All of that landed as v0.7.0 (item 14). Next: tokenizer
-   ecosystem bridges (GGUF/llama.cpp, vLLM) once the training side
-   settles, and the measured speed levers (PLAN_v0.8: judge memo,
-   book-on batch, pre-sizing — 5.5 MB/s vs tiktoken's 9.8 today).
+   domain. All of that landed as v0.7.0 (item 14). The v0.8 speed levers
+   landed: rolling-hash intern + merged book slots (**ids path 1.8 →
+   5.5 MB/s cold, 4.1 → 7.4 warm**), `batch_encode` (thread-parallel
+   per-doc ids for LM prep), trainer chunked-CE for big-vocab heads.
+   Next: tokenizer ecosystem bridges (GGUF/llama.cpp, vLLM) once the
+   training side settles; re-record bench_vs_tiktoken on a quiet box.
 6. **~~Fractional C~~ done** — double C everywhere, snapshot v5.
 7. **~~Credit carry-over patcher~~ done** — `carry=True`; −15.1% patches
    at C=20, mean rate → C exactly, streaming bit-exact.

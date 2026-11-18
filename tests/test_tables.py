@@ -69,6 +69,33 @@ def main():
           f"{n_legacy} marked legacy)", not bad,
           "; ".join(bad[:3]))
 
+    # P3.3 record-drift hardening: for every enveloped record, re-verify
+    # the sha256 of each bound input that still exists on disk. A changed
+    # hash means the record claims to be derived from bytes that have
+    # since moved — the provenance is stale and the record must be
+    # re-recorded. Inputs missing from the working tree (checkpoints,
+    # large corpora) are documented in the envelope but unverifiable
+    # here, and are skipped rather than failed.
+    from research.record_util import sha256_file
+    n_hash, drift = 0, []
+    for fn in sorted(os.listdir(rdir)):
+        if not fn.endswith(".json"):
+            continue
+        rec = json.load(open(os.path.join(rdir, fn)))
+        env = rec.get("record") or rec.get("protocol", {})
+        if not all(k in env for k in ENVELOPE_KEYS):
+            continue
+        for label, b in (env.get("inputs") or {}).items():
+            p = os.path.join(ROOT, b["path"])
+            if not os.path.isfile(p):
+                continue
+            n_hash += 1
+            if sha256_file(p) != b["sha256"]:
+                drift.append(f"{fn}: {label} ({b['path']}) changed since "
+                             f"the record was written")
+    check(f"record input hashes verified ({n_hash} bound files, no drift)",
+          not drift, "; ".join(drift[:3]))
+
     # version single-sourcing (P5-4): pyproject.toml is the source; the
     # built engine and the Python package must agree
     import ratec
