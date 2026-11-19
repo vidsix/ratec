@@ -1,8 +1,9 @@
 # v0.8.0 — the speed-and-standard release: notes
 
-Status: **DRAFT — numbers pending the C=14 record** (training in flight,
-checkpoint-resumable; the record + interpretation land in this file when
-the arm completes). Everything else in this list is committed and gated.
+Status: **EXECUTED — complete.** All items below are committed, gated,
+and the C=14 record is in (`research/lm_c_sweep.json`, extension block
++ row). Executed across five sandbox recycles; every recycle recovered
+in minutes via checkpoints and push-before-compute.
 
 ## What ships
 
@@ -38,13 +39,29 @@ the arm completes). Everything else in this list is committed and gated.
    document (layers, invariants, concurrency model, defaults audit);
    every number cited from a committed record. README refreshed:
    batch_encode, current ids-path numbers, roadmap.
-6. **C-sweep extension (pre-registered)**: the C=14 arm registered
-   BEFORE its run — interpretations live in the runner and the record's
-   extension block; C=12's rows and the frozen protocol untouched.
-   RESULT PENDING: C=14 below C=12's 3.3804 → interior optimum inside
-   {12,14}; at/above → the direction continues (stated as a direction,
-   never extrapolated). Param confound per run (256+9·2^14 = 147,712
-   head rows, 14.54M params).
+6. **C-sweep extension (pre-registered) — RESULT**: the C=14 arm was
+   registered BEFORE its run (interpretations in the record's
+   `extension_v0_8` block, 2026-11-18T17:42:06Z); C=12's rows and the
+   frozen protocol untouched. **C=14 lands at 3.3142 BPB — below C=12's
+   3.3804 — so the first pre-registered interpretation fires: the
+   LM-optimal budget at this scale sits inside {12,14}, with C=14 the
+   best measured arm (14.54M params; head rows 256+9·2^14 = 147,712 —
+   the param-count confound grows and is reported per run).** The sweep
+   stays monotone C=8→14: 3.5279 / 3.4451 / 3.3804 / 3.3142 at
+   2.11 / 2.68 / 3.32 / 4.01 bytes per token. Per-domain at C=14:
+   en 3.088, hr 3.278, zh 4.251, code 3.127. The run survived four
+   sandbox recycles on its checkpoints and reproduced its quickBPB
+   trajectory exactly across resumes.
+
+## Finding worth its own paragraph
+
+A long-lived RateC engine pins its judge maps in the process heap and
+batch workers spawned afterwards crawl against it — 4x slower, fully
+recovered once the engine is freed. The tiktoken-comparison protocol
+now frees the single-thread pool engine before the batch arm and the
+record was re-taken (batch 2T: ratec 5.51 vs tiktoken 14.0 MB/s);
+fresh-process batch — the LM-prep usage — measures ~9 MB/s aggregate.
+Allocator hardening is queued for v0.9.
 
 ## Provenance
 

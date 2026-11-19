@@ -266,8 +266,9 @@ The LM-optimal C sweep (the one knob, downstream):
 | 8 | 2560 | 606,048 | 3.5279 | 2.11 |
 | 10 | 9472 | 1,269,600 | 3.4451 | 2.68 |
 | 12 | 37120 | 3,923,808 | 3.3804 | 3.32 |
+| 14 | 147712 | 14,540,640 | 3.3142 | 4.01 |
 
-The sweep compares budgets, not parameter-matched models — head rows grow as 256 + 9·2^C and the record states that confound per row. The v0.8 C=14 arm is a pre-registered extension chasing the C=12-edge direction (`research/lm_c_sweep.json`, extension block).
+The sweep compares budgets, not parameter-matched models — head rows grow as 256 + 9·2^C and the record states that confound per row. The v0.8 C=14 extension (pre-registered in the record's extension_v0_8 block) landed BELOW C=12, firing the first pre-registered interpretation: the LM-optimal budget at probe scale sits inside {12,14}, C=14 measured best.
 <!-- /table:c_sweep -->
 
 

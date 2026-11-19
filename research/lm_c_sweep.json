@@ -20,19 +20,19 @@
    "monotone decrease to the C=12 edge -> the optimum lies above the swept range; stated as a direction, never extrapolated;",
    "params grow with C (head rows 256+9*2^C): reported per run as an explicit confound. Written before any sweep run (PLAN_v0.7.md P3)."
   ],
-  "ratec_version": "0.7.0",
+  "ratec_version": "0.8.0",
   "deps": {
    "numpy": "2.1.3",
    "torch": "2.15.0+cpu"
   },
-  "git_rev": "466640f",
+  "git_rev": "334234a",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-18T17:42:12+00:00",
+  "created_utc": "2026-11-19T19:33:50+00:00",
   "inputs": {
    "streams_manifest_c14": {
     "sha256": "aca2129057305310158b23b5bc4064715fa67c0aa4229331e981cf8b32733da0",
@@ -89,12 +89,28 @@
    "book_size_engine": 270624,
    "wall_sec": 1566.1599125862122,
    "source": "run"
+  },
+  "14": {
+   "final_bpb_overall": 3.3141650447156175,
+   "final_bpb_per_domain": {
+    "en": 3.0881581447282405,
+    "hr": 3.2784934169062145,
+    "zh": 4.250898230673566,
+    "code": 3.1266737463780694
+   },
+   "params": 14540640,
+   "v_eff": 147712,
+   "train_tokens": 3942850,
+   "bytes_per_token": 4.010197953257162,
+   "book_size_engine": 452337,
+   "wall_sec": 1240.6510648727417,
+   "source": "run"
   }
  },
  "status": {
-  "runs_complete": 3,
+  "runs_complete": 4,
   "runs_total": 3,
-  "updated_utc": "2026-11-18T17:42:10Z"
+  "updated_utc": "2026-11-19T19:33:50Z"
  },
  "extension_v0_8": {
   "what": "C=14 arm added via RATEC_SWEEP=14",

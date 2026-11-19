@@ -98,7 +98,7 @@ bytes ──judge──> per-byte surprisal ──patcher──> spans (start,en
 
 | use case | C | why |
 | --- | --- | --- |
-| tiny probe LM (~4M params) | **12** | 3.3804 BPB — best measured; the pre-registered C=14 arm (v0.8) decides whether the optimum climbs further |
+| tiny probe LM (~14.5M params) | **14** | 3.3142 BPB — best measured; the sweep stays monotone through C=14 (the pre-registered v0.8 extension arm) |
 | general tokenization / compression | **20** (default) | 3.24 bytes/token over the 4 bake-off domains (bench_c_sweep record); judge bandwidth dominates |
 | very long streams, warm caches | 20-24 | fertility keeps improving with C; map grows on demand |
 

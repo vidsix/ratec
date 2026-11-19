@@ -1,13 +1,21 @@
 {
  "protocol": {
   "c_bits": 20,
-  "pf": 3,
+  "pf": 2,
   "reps": {
-   "tiktoken": 25,
-   "ratec": 31
+   "tiktoken_encode_ordinary": 21,
+   "ratec_pool": 21,
+   "batch": 9,
+   "pf_sweep": 15,
+   "ratec_cold_samples_per_domain": 4
   },
-  "input": "bake-off scored spans (32768B warm edge trimmed)",
-  "ratec_arm": "ratec 0.1.0 engine, pool steady-state (in-place reset, reset cost included), store_book=False, pf=2, prebits=21",
+  "timing": "round-robin interleaved within one process, medians; batch arms interleaved too",
+  "input": "bake-off scored spans (shipped fixtures; or RATEC_BAKEOFF_DATA + RATEC_BAKEOFF_CACHE)",
+  "golden_mode": "shipped C=20 starts",
+  "ratec_arm": "ratec engine, pool steady-state (in-place reset, reset cost included), store_book=False, pf=2, prebits=16 (library default)",
+  "ratec_version": "0.8.0",
+  "tiktoken_version": "0.14.0",
+  "numpy_version": "2.1.3",
   "exactness": {
    "english": true,
    "code": true,
@@ -19,120 +27,120 @@
   "english": {
    "bytes": 267232,
    "bpe50k": {
-    "med_s": 0.019908287,
+    "med_s": 0.018815664,
     "units": 73601,
-    "MB_per_s": 13.423153885615573,
+    "MB_per_s": 14.202634570855434,
     "units_per_byte": 0.27541985989701834
    },
    "cl100k": {
-    "med_s": 0.019152315,
+    "med_s": 0.017828307,
     "units": 61854,
-    "MB_per_s": 13.952986884353146,
+    "MB_per_s": 14.989196674703884,
     "units_per_byte": 0.23146180098191832
    },
    "o200k": {
-    "med_s": 0.013861515,
+    "med_s": 0.013148125,
     "units": 61275,
-    "MB_per_s": 19.278700776935278,
+    "MB_per_s": 20.32472310690688,
     "units_per_byte": 0.2292951442940965
    },
    "ratec": {
-    "med_s": 0.048695439,
+    "med_s": 0.042300119,
     "units": 54572,
     "exact": true,
     "pf": 2,
-    "cold_med_s": 0.065298897,
-    "MB_per_s": 5.487824023929633,
+    "cold_med_s": 0.11300813600000001,
+    "MB_per_s": 6.317523598456071,
     "units_per_byte": 0.20421207041072925
    }
   },
   "code": {
    "bytes": 164574,
    "bpe50k": {
-    "med_s": 0.013828222,
+    "med_s": 0.013153352,
     "units": 67814,
-    "MB_per_s": 11.90131312615606,
+    "MB_per_s": 12.511943723546667,
     "units_per_byte": 0.4120577977080219
    },
    "cl100k": {
-    "med_s": 0.013817331,
+    "med_s": 0.013185893,
     "units": 37176,
-    "MB_per_s": 11.910693895948501,
+    "MB_per_s": 12.481065939182123,
     "units_per_byte": 0.225892303766087
    },
    "o200k": {
-    "med_s": 0.009589454,
+    "med_s": 0.008968669,
     "units": 37322,
-    "MB_per_s": 17.161978148078084,
+    "MB_per_s": 18.34988001006615,
     "units_per_byte": 0.2267794426823192
    },
    "ratec": {
-    "med_s": 0.035454325,
+    "med_s": 0.029954153,
     "units": 33211,
     "exact": true,
     "pf": 2,
-    "cold_med_s": 0.0363383735,
-    "MB_per_s": 4.641859632075917,
+    "cold_med_s": 0.0462571805,
+    "MB_per_s": 5.494196414099908,
     "units_per_byte": 0.20179979826704098
    }
   },
   "chinese": {
    "bytes": 267231,
    "bpe50k": {
-    "med_s": 0.019125627,
+    "med_s": 0.018633828,
     "units": 192876,
-    "MB_per_s": 13.97240466939986,
+    "MB_per_s": 14.34117562961298,
     "units_per_byte": 0.7217575805202241
    },
    "cl100k": {
-    "med_s": 0.02095103,
+    "med_s": 0.020032511,
     "units": 123114,
-    "MB_per_s": 12.755029227679977,
+    "MB_per_s": 13.339865381828568,
     "units_per_byte": 0.4607025382534212
    },
    "o200k": {
-    "med_s": 0.021917446,
+    "med_s": 0.020490294,
     "units": 88178,
-    "MB_per_s": 12.192615873218074,
+    "MB_per_s": 13.041833367544653,
     "units_per_byte": 0.32996920267483937
    },
    "ratec": {
-    "med_s": 0.053822422,
+    "med_s": 0.044352882,
     "units": 78103,
     "exact": true,
     "pf": 2,
-    "cold_med_s": 0.071159433,
-    "MB_per_s": 4.96504969620282,
+    "cold_med_s": 0.12869415,
+    "MB_per_s": 6.02511016082337,
     "units_per_byte": 0.2922677383986139
    }
   },
   "base64": {
    "bytes": 260568,
    "bpe50k": {
-    "med_s": 0.028659542,
+    "med_s": 0.027155474,
     "units": 200542,
-    "MB_per_s": 9.09184103500328,
+    "MB_per_s": 9.595413433033796,
     "units_per_byte": 0.7696340302723281
    },
    "cl100k": {
-    "med_s": 0.032051624,
+    "med_s": 0.03045628,
     "units": 186976,
-    "MB_per_s": 8.129634866551536,
+    "MB_per_s": 8.555476900002233,
     "units_per_byte": 0.7175708452304197
    },
    "o200k": {
-    "med_s": 0.029132947,
+    "med_s": 0.027602973,
     "units": 178002,
-    "MB_per_s": 8.9441002999113,
+    "MB_per_s": 9.439852728907136,
     "units_per_byte": 0.6831306990881459
    },
    "ratec": {
-    "med_s": 0.075419732,
+    "med_s": 0.06256658,
     "units": 130283,
     "exact": true,
     "pf": 2,
-    "cold_med_s": 0.0816414255,
-    "MB_per_s": 3.4549048782087954,
+    "cold_med_s": 0.1211810025,
+    "MB_per_s": 4.16465148007131,
     "units_per_byte": 0.49999616223020477
    }
   }
@@ -140,74 +148,98 @@
  "overall": {
   "bpe50k": {
    "total_bytes": 959605,
-   "total_s": 0.081521678,
-   "MB_per_s": 11.7711634934698
+   "total_s": 0.07775831799999999,
+   "MB_per_s": 12.340866220897423
   },
   "cl100k": {
    "total_bytes": 959605,
-   "total_s": 0.0859723,
-   "MB_per_s": 11.161792810009734
+   "total_s": 0.081502991,
+   "MB_per_s": 11.773862385001307
   },
   "o200k": {
    "total_bytes": 959605,
-   "total_s": 0.074501362,
-   "MB_per_s": 12.880368549503833
+   "total_s": 0.070210061,
+   "MB_per_s": 13.66762806259348
   },
   "ratec": {
    "total_bytes": 959605,
-   "total_s": 0.213391918,
-   "MB_per_s": 4.496913514784566
+   "total_s": 0.179173734,
+   "MB_per_s": 5.355723624088785
   }
  },
  "speedup_vs_r50k": {
-  "english": 0.4088326834880778,
-  "code": 0.39002919954053555,
-  "chinese": 0.3553468292452539,
-  "base64": 0.3800005812802411,
-  "ALL": 0.3820279547794307
+  "english": 0.44481350040646456,
+  "code": 0.4391161385868597,
+  "chinese": 0.42012665603105565,
+  "base64": 0.4340252256076647,
+  "ALL": 0.43398279571491205
  },
  "batch_2t": {
-  "ratec_MBps": 7.279432633639236,
-  "tiktoken_MBps": 13.624488994986038,
-  "ratio": 0.5342903235723664,
+  "ratec_MBps": 5.509906425378931,
+  "tiktoken_MBps": 14.025377762802618,
+  "ratio": 0.39285262176624003,
+  "reps": 9,
+  "timing": "interleaved, median",
   "exact": true
  },
  "pf_sweep_english": {
   "0": {
-   "med_s": 0.070112646,
-   "MBps": 3.8114664792425605
+   "med_s": 0.041123276,
+   "MBps": 6.498314968875534
   },
   "1": {
-   "med_s": 0.033809113,
-   "MBps": 7.904141111303334
+   "med_s": 0.025397561,
+   "MBps": 10.52195523814275
   },
   "2": {
-   "med_s": 0.033376715,
-   "MBps": 8.0065398886619
+   "med_s": 0.025803477,
+   "MBps": 10.356433747281423
   },
   "3": {
-   "med_s": 0.034594792,
-   "MBps": 7.724630921324805
+   "med_s": 0.026621182,
+   "MBps": 10.038322115073628
   },
   "4": {
-   "med_s": 0.038124031,
-   "MBps": 7.009542091705884
+   "med_s": 0.028304245,
+   "MBps": 9.441410643527146
   }
  },
  "record": {
-  "ratec_version": "0.6.0",
+  "ratec_version": "0.8.0",
   "deps": {
-   "numpy": "2.1.3"
+   "numpy": "2.1.3",
+   "tiktoken": "0.14.0"
   },
-  "git_rev": "",
+  "git_rev": "334234a",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-08T12:31:09+00:00",
-  "inputs": {},
-  "provenance": "copied verbatim from the v0.3-era workspace report (results/ was unversioned then); envelope added at import into research/ in v0.6.0 \u2014 protocol fields inside reflect what the P0-4-fixed producer now writes"
+  "created_utc": "2026-11-19T19:46:59+00:00",
+  "inputs": {
+   "fixtures/english.span.bin": {
+    "sha256": "6f5782af1d5b4c572bd4cc72f27bf09d0550d8df54bd2b5de7dce5765ea65afc",
+    "path": "tests/data/fixtures/english.span.bin",
+    "bytes": 267232
+   },
+   "fixtures/code.span.bin": {
+    "sha256": "411a6530352d2ad5d3f5e7cc1328a0acf86fddab497cb52c55e9c768a4c961de",
+    "path": "tests/data/fixtures/code.span.bin",
+    "bytes": 164574
+   },
+   "fixtures/chinese.span.bin": {
+    "sha256": "39a95c6ffe908a4dd8c2dfbfcd0647a8ea40a078b40240179a2851ea93ddcdec",
+    "path": "tests/data/fixtures/chinese.span.bin",
+    "bytes": 267231
+   },
+   "fixtures/base64.span.bin": {
+    "sha256": "c187504d946ce16476a08543e820cd8b66ea048ea66d5c6fb600e716b4b6a92c",
+    "path": "tests/data/fixtures/base64.span.bin",
+    "bytes": 260568
+   }
+  },
+  "provenance": "batch arm measures the batch path with the single-arm pool engine freed first (a live long-lived engine pins the heap and poisons the batch workers 4x; see bench source + release notes)"
  }
 }

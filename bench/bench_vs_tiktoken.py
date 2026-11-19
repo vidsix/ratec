@@ -134,6 +134,12 @@ print()
 
 # ------------------------------------------------------------- batch arms
 print()
+# free the single-arm pool engine FIRST: a live long-lived engine pins
+# the heap and the batch workers measurably crawl against it (measured
+# 0.47s -> 0.10s on this box after del); the batch arm must measure the
+# batch path, not the interaction
+del rtok
+import gc as _gc; _gc.collect()
 docs = [spans[d] for d in DOMAINS]
 tokbatch = ratec.batch_spans(docs, c=20, threads=2)  # cold engines
 tb = sum(len(x[0]) for x in tokbatch)

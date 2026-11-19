@@ -41,6 +41,19 @@
   a committed record.
 - README: batch_encode, current ids-path numbers, roadmap refresh.
 
+### Finding: live-engine heap pin vs batch throughput (documented, unregressed in fresh process)
+
+- A long-lived engine (e.g. the single-thread bench pool) pins its judge
+  maps in the heap; batch workers spawned afterwards crawl against it:
+  4x slowdown, fully recovered by freeing the engine (0.47s -> 0.10s for
+  the 4-doc batch). The bench_vs_tiktoken protocol now frees the pool
+  engine before the batch arm; `bench_tiktoken.json` re-recorded
+  accordingly (batch 2T: ratec 5.51 vs tiktoken 14.0 MB/s). A
+  fresh-process batch (the LM-prep usage) measures ~9 MB/s aggregate.
+  An engine-side allocator hardening (worker-side trim / mmap-backed
+  maps) is queued for v0.9. A mallopt(M_MMAP_THRESHOLD) attempt was
+  tested and reverted as ineffective.
+
 ### C-sweep extension (pre-registered, in flight)
 
 - `RATEC_SWEEP=14` extension arm registered BEFORE its run (its
