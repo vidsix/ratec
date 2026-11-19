@@ -111,8 +111,12 @@ static inline void *fos(Map *m, uint64_t key) {
     uint64_t i = (key * GOLDEN) >> (64 - m->capbits);
     for (;;) {
         uint8_t *base = (uint8_t *)m->e + i * m->esize;
-        uint32_t tot = *(const uint32_t *)(base + 8);
-        if (tot == 0) {
+        /* hit path first: the key sits on the same cache line the caller
+         * touches anyway, and the insert branch stays off the hot
+         * fetch/predict stream in steady state */
+        if (*(const uint64_t *)base == key &&
+            *(const uint32_t *)(base + 8) != 0) return base;
+        if (*(const uint32_t *)(base + 8) == 0) {
             *(uint64_t *)base = key; m->n++;
             {   /* mark the slot's page dirty: bitmap bit = page index */
                 const uint64_t pgidx = i >> m->page_shift;
@@ -120,7 +124,6 @@ static inline void *fos(Map *m, uint64_t key) {
             }
             return base;
         }
-        if (*(const uint64_t *)base == key) return base;
         i = (i + 1) & m->mask;
     }
 }

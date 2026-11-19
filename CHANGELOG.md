@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.8.1 — the speed campaign (internal)
+
+### Kept
+
+- **fos hit-path reorder**: the map probe's hot path now checks the key
+  first (insert branch demoted off the fetch/predict stream). Measured
+  on the 4-domain ladder (61 MB, best-of-3): surprise 9.79 -> 11.16
+  MB/s (+14%), spans 7.54 -> 8.07 (+7%), spans-with-book 5.63 -> 5.90
+  (+5%). Bit-exact by construction (same slots, same semantics); full
+  suite green.
+
+### Measured and rejected (the ledger is the deliverable)
+
+- **Per-window slot locator** (one tagged 32 B entry caching the three
+  order-3/4/5 tmap slot indices, flushed on growth): LOST 31% on
+  surprise (9.79 -> 6.76). The locator line is a fourth dependent miss
+  that serializes the three Ent fetches that previously issued in
+  parallel; the probe "overhead" the profile blamed is actually the
+  data-fetch cost. Reverted.
+- **PF default 1** (prefetch depth): +4% in a warm-state C harness but
+  -10% in the real cold-engine Python path (6.75 vs 7.54) — the harness
+  regime lied. Reverted; pf=2 stands.
+- **Hugepages on the cnt2 table**: nil (24.10 vs 24.23 MB/s).
+
+### Profile (block-excision, 16 MB, C harness)
+
+full 23.4 | -map-probes 43.8 (47% of runtime) | -log2 25.3 (8%) |
+-direct-orders 25.4 (9%) | pf=0 20.6 (prefetch worth +14%).
+
+### New bench
+
+- **bench/bench_gigatoken.py**: sustained GB-scale throughput (1.07 GB
+  tiled 4-domain stream, one warm engine per arm, 4 MiB ingestion
+  chunks). Engine 0.8.1 sustained: spans+book 4.26 MB/s (0.254 Mtok/s),
+  judge-only 6.18 MB/s. A gigatoken (1e9 tokens) at the spans rate
+  needs ~65 min today.
+
+### v0.9 headliner (design locked by today's profile)
+
+**Fused window slots**: one 128 B slot per order-5 window holding all
+three higher orders' KT state (2 cache lines per byte instead of 3,
+one probe instead of three), wire-format-compatible (v6 on the wire:
+per-order logical entries; orphan head contexts to an overflow map).
+Targets the 47% probe block; the locator lesson says the win must come
+from FEWER fetched lines, not from caching fetches.
+
 ## Unreleased
 
 ### Speed: merged book hash slots (+12% ids path on top of the intern)

@@ -1,0 +1,56 @@
+{
+ "bytes_total": 1072838390,
+ "chunk": 4194304,
+ "c": 20,
+ "spans_book": {
+  "sec": 252.061,
+  "MB_per_s": 4.26,
+  "tokens": 63934464,
+  "Mtok_per_s": 0.254,
+  "GB_processed": 1.073
+ },
+ "judge_only": {
+  "sec": 173.503,
+  "MB_per_s": 6.18,
+  "tokens": null,
+  "Mtok_per_s": null,
+  "GB_processed": 1.073
+ },
+ "record": {
+  "ratec_version": "0.8.1",
+  "deps": {
+   "numpy": "2.1.3"
+  },
+  "git_rev": "cb32ff7",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-19T21:53:41+00:00",
+  "inputs": {
+   "fixtures/english.span.bin": {
+    "sha256": "6f5782af1d5b4c572bd4cc72f27bf09d0550d8df54bd2b5de7dce5765ea65afc",
+    "path": "tests/data/fixtures/english.span.bin",
+    "bytes": 267232
+   },
+   "fixtures/code.span.bin": {
+    "sha256": "411a6530352d2ad5d3f5e7cc1328a0acf86fddab497cb52c55e9c768a4c961de",
+    "path": "tests/data/fixtures/code.span.bin",
+    "bytes": 164574
+   },
+   "fixtures/chinese.span.bin": {
+    "sha256": "39a95c6ffe908a4dd8c2dfbfcd0647a8ea40a078b40240179a2851ea93ddcdec",
+    "path": "tests/data/fixtures/chinese.span.bin",
+    "bytes": 267231
+   },
+   "fixtures/base64.span.bin": {
+    "sha256": "c187504d946ce16476a08543e820cd8b66ea048ea66d5c6fb600e716b4b6a92c",
+    "path": "tests/data/fixtures/base64.span.bin",
+    "bytes": 260568
+   }
+  },
+  "provenance": "sustained GB-scale throughput, one warm engine per arm, 4 MiB ingestion chunks (the LM-prep pattern); engine 0.8.1: fos hit-path reorder (+5-14% across paths). A gigatoken (1e9 tokens) at the measured 0.254 Mtok/s spans rate needs ~65 min; the v0.9 structural bets (fused window slots) target the ~60x to gigatoken-class throughput."
+ }
+}
