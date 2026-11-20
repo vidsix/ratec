@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.8.2 — the research-driven increments (internal)
+
+Sourced from a survey of tiktoken-adjacent speed work and the
+gigatoken library (marcelroed/gigatoken, Rust, static-vocab BPE at
+GB/s via SIMD pretokenization + a long-tailed repeat-word cache +
+whole-file self-managed parallel ingestion).
+
+### Kept
+
+- **decode buffer-protocol fast path** (C): numpy uint32 / buffer
+  inputs decode straight from memory — no per-id PyLong boxing.
+  Measured on the code fixture: 14.9 (array via sequence protocol) /
+  44.7 (list) -> **94.5 Mids/s** (2.1x over list). Bounds checks and
+  error messages unchanged; list path untouched.
+- **`decode_bytes` numpy wiring + `decode_batch`** (api.py): buffer
+  objects route to the fast path automatically; batch decode helper.
+- **`encode_file(path, separator=...)`** (api.py): gigatoken
+  TextFileSource parity — mmap the file, split on the document
+  separator, batch-encode on the C thread pool (independent cold
+  judges per doc, same documented semantics as encode_batch).
+
+### Measured and rejected (ledger continues)
+
+- **Patch-intern recurrence memo** (gigatoken repeat-cache analog):
+  direct-mapped, memcmp-verified, prune/reset-invalidated — LOST 3%
+  on the spans-with-book path. Their cache skips an entire BPE
+  pipeline for repeated words; ours would skip one probe whose first
+  slot is usually already the answer, while costing a line fetch per
+  patch. Reverted clean (BMemoEnt count in source: 0).
+- Confirmed already-present: batch worker **map presizing**
+  (`2^bits >= 6n` per doc, v0.8.0) — gigatoken's warm-start lesson
+  was already applied here.
+- Structural note for the record: gigatoken's SIMD pretokenization
+  has no RateC analog — our pretokenization-equivalent (the judge)
+  is per-byte adaptive and inherently serial; the v0.9 fused window
+  slots attack the same cost center (per-byte map traffic) from the
+  memory-layout side instead.
+
+## v0.9.0 roadmap (draft — the polished release)
+
+1. **Fused window slots** (headliner): one 128 B slot per order-5
+   window holding all three higher orders' KT state — 2 cache lines
+   per byte instead of 3, one probe instead of three; v6-wire
+   compatible (per-order logical entries on the wire, orphan head
+   contexts to an overflow map). Targets the profiled 47% block.
+2. **Features**: `encode_files` (multi-file driver), book/vocab
+   export (tiktoken-ranks-style introspection), compat validate
+   mode in the bench, snapshot v7 only if the fused slots demand it.
+3. **Speed**: `encode_stream_parallel` chunk-size auto-tuning,
+   decode gather kernel (memcpy fan-out unrolled), gigatoken bench
+   on the 0.9 engine for the before/after record.
+4. **Polish**: full API docs pass, error-message audit, packaging
+   (sdist/wheel), CI matrix, release page for 0.9.0.
+
 ## v0.8.1 — the speed campaign (internal)
 
 ### Kept

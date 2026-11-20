@@ -226,8 +226,7 @@ static void book_init(Book *b) {
     b->capbits = 10; b->mask = (1ull << b->capbits) - 1;
     b->slot = (BSlot *)calloc(1ull << b->capbits, sizeof(BSlot));
     if (!b->slot) { b->err = 1; }
-}
-static int book_grow_hash(Book *b) {
+}static int book_grow_hash(Book *b) {
     uint64_t ncap = b->capbits + 1;
     BSlot *sl = (BSlot *)calloc(1ull << ncap, sizeof(BSlot));
     if (!sl) return -1;
@@ -1555,6 +1554,47 @@ static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
     if (!self->core->store_book) {
         PyErr_SetString(RatecError, "decode_bytes requires store_book=True");
         return NULL;
+    }
+    /* fast path: a uint32 buffer (numpy array / array('I') / bytes) is
+     * decoded straight from memory — no per-id PyLong boxing. Exactness:
+     * same ids, same bounds check, same book reads. */
+    Py_buffer view;
+    if (PyObject_CheckBuffer(arg) &&
+        PyObject_GetBuffer(arg, &view, PyBUF_SIMPLE) == 0) {        if (view.len % 4 != 0) {
+            PyBuffer_Release(&view);
+            PyErr_SetString(PyExc_ValueError,
+                            "buffer length must be a multiple of 4 (uint32 ids)");
+            return NULL;
+        }
+        const size_t n = (size_t)view.len / 4;
+        const uint32_t *ids = (const uint32_t *)view.buf;
+        const uint32_t bn = self->core->book.n;
+        size_t total = 0;
+        for (size_t k = 0; k < n; k++) {
+            const uint32_t v = ids[k];
+            if (v >= bn) {
+                PyBuffer_Release(&view);
+                PyErr_Format(RatecError, "unknown patch id %u "
+                             "(book has %u entries; decode only works on the "
+                             "tokenizer instance (or same-state copy) that "
+                             "produced the ids)", v, bn);
+                return NULL;
+            }
+            total += self->core->book.ln[v];
+        }
+        PyObject *out = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)total);
+        if (!out) { PyBuffer_Release(&view); return NULL; }
+        uint8_t *wp = (uint8_t *)PyBytes_AS_STRING(out);
+        for (size_t k = 0; k < n; k++) {
+            const uint32_t v = ids[k];
+            memcpy(wp, self->core->book.arena + self->core->book.off[v],
+                   self->core->book.ln[v]);
+            wp += self->core->book.ln[v];
+        }
+        PyBuffer_Release(&view);
+        return out;
+    } else if (PyObject_CheckBuffer(arg)) {
+        PyErr_Clear();   /* non-contiguous etc. — fall through to sequence */
     }
     PyObject *seq = PySequence_Fast(arg, "ids must be a sequence of ints");
     if (!seq) return NULL;
