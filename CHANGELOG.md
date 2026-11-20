@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.8.4 — introspection + validate surface, approximation-quality data (internal)
+
+### Kept
+
+- **`book_counts` / `counts()`** (C + api): per-id occurrence counts
+  (window counts since last prune, index == id) as raw uint32 bytes.
+  Verified: sum(counts) == n_patches on the english fixture;
+  prune preview (survivors at prune_min=2: 9255/29640) makes prune
+  tuning measurable without serializing.
+- **`validate(data)`** (api): gigatoken CLI --validate parity —
+  roundtrip exactness on a state COPY (caller's streaming position
+  untouched), patch statistics, bytes/patch, book size. Verified on
+  english: roundtrip_ok=True, 6.86 bytes/patch.
+- **head_chunks agreement curve documented** (encode_stream_parallel
+  docstring): span-boundary agreement with sequential encode rises
+  0.23 / 0.35 / 0.46 / 0.56 for head_chunks = 1 / 2 / 3 / 4 on a
+  10.7 MiB corpus with 1 MiB chunks. Default stays 1 (minimal
+  sequential fraction); the knob is now an informed choice instead
+  of a guess.
+
+### Measured and deprioritized (ledger continues)
+
+- **C-level decode_batch**: python-loop batch decode already runs at
+  119.8 Mids/s aggregate (L2-warm small chunks beat the single-call
+  117.6); per-sequence cost 4.6 us total. A C batch saves ~1-2 us of
+  Python entry per call — not worth the C surface now.
+- No new external research this pass (wordchipper/TokenDagger/gigatoken
+  lessons already mined in 0.8.2-0.8.3); increments drawn from the
+  existing v0.9.0 roadmap items 2/4.
+- Suite 18/18 (5:28) on the 0.8.4 engine.
+
 ## v0.8.3 — decode gather kernel + export/interop surface (internal)
 
 Research pass: TokenDagger (repo unreachable — 404, nothing on

@@ -164,6 +164,13 @@ class RateC:
         chunk=None auto-tunes: n/threads clamped to [1, 8] MiB so workers
         stay balanced and the sequential head stays a small fraction.
 
+        head_chunks trades sequential work for approximation quality.
+        Measured (10.7 MiB english corpus, 1 MiB chunks): span-boundary
+        agreement with sequential encode_to_spans rises 0.23 / 0.35 /
+        0.46 / 0.56 for head_chunks = 1 / 2 / 3 / 4. Default 1 keeps the
+        sequential fraction minimal; raise it when patch boundaries must
+        track the single-engine view more closely.
+
         Returns [(start, end, id|None), ...] with absolute offsets.
         """
         data = _as_bytes(data)
@@ -290,6 +297,31 @@ class RateC:
                 f.write(base64.b64encode(piece) + b" %d\n" % i)
                 n += 1
         return n
+
+    def counts(self) -> np.ndarray:
+        """Per-id occurrence counts (window counts since the last prune,
+        index == id) — prune-tuning introspection: how many patches
+        survive a given prune_min."""
+        raw = self._eng.book_counts()
+        if raw is None:
+            raise RuntimeError("book counts unavailable")
+        return np.frombuffer(raw, dtype=np.uint32)
+
+    def validate(self, data, *, decode_check: bool = True) -> dict:
+        """Integrity report for a corpus against this instance's state
+        (gigatoken CLI --validate parity): roundtrip exactness, patch
+        statistics, compression. Runs on a COPY of the judge/patcher
+        state, so the caller's streaming position is untouched."""
+        data = _as_bytes(data)
+        eng = _rc.load_state(self._eng.save_state())
+        ids = eng.encode_bytes(data)
+        rep: dict = {"n_bytes": len(data), "n_patches": len(ids),
+                     "bytes_per_patch": (len(data) / len(ids)) if ids else 0.0}
+        if decode_check:
+            out = eng.decode_bytes(np.array(ids, dtype=np.uint32))
+            rep["roundtrip_ok"] = (out == data)
+        rep["n_book"] = self._eng.book_size
+        return rep
 
     # ----------------------------------------------------------- research
     def surprise(self, data) -> np.ndarray:

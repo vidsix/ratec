@@ -1714,7 +1714,24 @@ static PyObject *Engine_book_dump(EngineObj *self, PyObject *unused) {
     return lst;
 }
 
+/* book_counts: per-id occurrence counts (window counts since the last
+ * prune, index == id) as raw uint32 bytes — prune-tuning introspection
+ * (which patches survive a prune_min threshold) without serializing. */
+static PyObject *Engine_book_counts(EngineObj *self, PyObject *unused) {
+    if (!self->core->store_book) {
+        PyErr_SetString(RatecError, "book_counts requires store_book=True");
+        return NULL;
+    }
+    Book *b = &self->core->book;
+    if (!b->cnt) Py_RETURN_NONE;
+    return PyBytes_FromStringAndSize((const char *)b->cnt,
+                                     (Py_ssize_t)(b->n * 4));
+}
+
 static PyMethodDef Engine_methods[] = {
+    {"book_counts",  (PyCFunction)Engine_book_counts,  METH_NOARGS,
+     "book_counts() -> bytes of uint32 per-id occurrence counts\n"
+     "(window counts since last prune; index == id)."},
     {"feed",         (PyCFunction)Engine_feed,         METH_O,
      "feed(data) -> [(start, end, id|None)]; patches closed by this chunk.\n"
      "Patches may span chunk boundaries; call flush() at end of stream."},
