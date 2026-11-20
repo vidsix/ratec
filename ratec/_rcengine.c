@@ -720,6 +720,17 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     const uint64_t nok = ((uint64_t)oi << 48) | hc;
                     __builtin_prefetch((uint8_t *)tl.e + (((nok * GOLDEN) >> (64 - tl.capbits))) * tl.esize, 1, 3);
                 }
+                /* BET B (v0.8.5): exact-line prefetch for the order-2
+                 * direct row — the future byte buf[i+p] is known, so its
+                 * cnt line within the (flat, aligned) row is exact.
+                 * Order-1 prefetch measured and REJECTED: the 256 KB
+                 * table is L2-resident; extra prefetches cost 2-7%. */
+                {
+                    uint64_t hc2 = h[2];
+                    for (int q = 0; q < p; q++)
+                        hc2 = ((hc2 << 8) | buf[i + q]) & MASK[2];
+                    __builtin_prefetch(&cnt2[(hc2 << 8) | buf[i + p]], 1, 3);
+                }
             }
         }
 

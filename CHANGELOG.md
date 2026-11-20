@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.8.5 — the absolute-optimization pass (internal)
+
+Campaign: attack the per-byte memory-traffic block directly. Two
+structural bets implemented, measured on the 4-lane ladder with a
+full bit-exactness gate (per-fixture ids + 0.8.4-snapshot
+continuation ids captured BEFORE any edit).
+
+### Kept
+
+- **BET B — order-2 exact-line prefetch** (C, run_body PF block):
+  the future byte buf[i+p] is known at prefetch distance p, so the
+  exact cnt2 line it will touch is prefetched (was: only the order
+  3-5 map slots). Final build vs 0.8.4 baseline, best-of-3:
+  spans_book −7.9%, spans_nobook −6.7%, warm −9.4%, ids_book −10.0%
+  (6.79/8.69/10.86/5.73 -> 7.37/9.32/11.98/6.36 MB/s; run noise on
+  this box is ±5-10%, an earlier run showed ids up to −21%).
+  Bit-exact: ids identical on all four fixtures; v0.8.4 snapshot
+  loads and continues identically.
+- **PF sweep re-run under BET B**: pf=0 collapses (4.93/4.36/5.95
+  MB/s — prefetch dominates), pf=1 vs default 2 is mixed within
+  noise. PF_DEFAULT stays 2. The 0.8.1 "PF=1 −10%" verdict does not
+  transfer to the BET-B regime; default unchanged anyway.
+
+### Measured and rejected (ledger continues)
+
+- **BET A — tot-into-row fusion** (Ct1/Ct2 {tot, cnt[256]} rows,
+  v6-wire-preserving writer/loader reshape): all exactness gates
+  passed, but LOST 27-45% on the ladder. Root cause: the 1028 B row
+  stride destroys the power-of-2 row indexing (h2*1024 was a pure
+  shift; h2*1028 needs a multiply) and un-aligns every row start
+  from 64 B cache lines. The saved tot-stream traffic does not pay
+  for making every access more expensive. Reverted via git checkout;
+  the writer/loader reshape code is preserved in this entry for any
+  v0.9 revisit (the fused-window-slot design must keep 1024 B rows —
+  e.g. tot in a parallel head array per row GROUP, not per row).
+- **Order-1 exact-line prefetch**: +2-7% on every lane — the 256 KB
+  cnt1 table is L2-resident; extra prefetches cost instructions and
+  pollute. Reverted to order-2-only.
+
+### Gates
+
+- Suite 18/18 (5:10) on the 0.8.5 engine.
+
 ## v0.8.4 — introspection + validate surface, approximation-quality data (internal)
 
 ### Kept
