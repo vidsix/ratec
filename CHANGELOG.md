@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.8.6 — the measurement-integrity release (internal)
+
+Finding first: single-run benchmarks on this box drift 10-20%
+between runs. Re-measuring the v0.8.x line with an interleaved A/B
+harness (multi-round, per-lane median — scripts/bench_ab.py, now part
+of the repo) reclassified results:
+
+### Ledger corrections (interleaved A/B, 4 rounds, median)
+
+- **Decode gather kernel CONFIRMED**: v0.8.2 -> v0.8.6 decode_bytes
+  91.3 -> 105.3 Mids/s (-13.3% time, interleaved). The software-
+  pipelining mechanism is real; the decode line stands.
+- **BET B (order-2 exact-line prefetch) RECLASSIFIED as noise**:
+  v0.8.4 vs v0.8.5 differ by -0.3..+0.9% on every lane — the
+  "−6.7..−10%" v0.8.5 claims were single-run artifacts. The build is
+  kept (harmless, mechanically sound, exact) but the win claim is
+  withdrawn. Encode throughput is unchanged across v0.8.4..v0.8.6.
+- **BET C (cmap prefetch) REJECTED by A/B**: +2.3..+8.7% time on all
+  lanes — it had "won" −14..−17% in single runs. tc slots are
+  covered by locality after promotion; the extra hash+prefetch
+  chains cost more than they save. Not shipped.
+- **BET D (fast lane) REJECTED**: only +3-4% vs exact — the cost is
+  KT-state-bound, not log2-bound; strengthens the v0.9 fused-slot
+  case. Not exposed.
+- **BET E (tot2 prefetch) REJECTED**: noise level.
+- **PF default re-confirmed interleaved**: pf=2 beats pf=1 by 1.9-
+  2.4% and pf=3 by 2.6-3.5% (both lanes); pf=0 collapses (~30%).
+  Default stays 2.
+
+### Shipped
+
+- scripts/bench_ab.py: the interleaved A/B harness (rounds, medians,
+  ids-agreement assert between builds, decode lane). All future
+  keep/reject decisions run through it.
+- v0.8.6 engine == v0.8.5 engine modulo a PF-block comment
+  (sub-1% A/B verified); suite 18/18.
+
 ## v0.8.5 — the absolute-optimization pass (internal)
 
 Campaign: attack the per-byte memory-traffic block directly. Two

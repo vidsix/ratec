@@ -719,6 +719,11 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                         hc = ((hc << 8) | buf[i + q]) & MASK[oi];
                     const uint64_t nok = ((uint64_t)oi << 48) | hc;
                     __builtin_prefetch((uint8_t *)tl.e + (((nok * GOLDEN) >> (64 - tl.capbits))) * tl.esize, 1, 3);
+                    /* BET C (v0.8.6 candidate: cmap prefetch) measured by
+                     * interleaved A/B (4 rounds, median): +2.3..+8.7% time
+                     * on every lane — tc slots are covered by locality
+                     * after promotion and the extra hash+prefetch chains
+                     * cost more than they save. REJECTED, not shipped. */
                 }
                 /* BET B (v0.8.5): exact-line prefetch for the order-2
                  * direct row — the future byte buf[i+p] is known, so its
@@ -730,6 +735,8 @@ run_body(RcCore *e, const uint8_t *buf, size_t n, int want_patches,
                     for (int q = 0; q < p; q++)
                         hc2 = ((hc2 << 8) | buf[i + q]) & MASK[2];
                     __builtin_prefetch(&cnt2[(hc2 << 8) | buf[i + p]], 1, 3);
+                    /* BET E (tot2 line prefetch) measured NOISE-level
+                     * (-0.9..+2.0%) and reverted — tot2 stays uncovered. */
                 }
             }
         }
