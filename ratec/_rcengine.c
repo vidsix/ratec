@@ -1816,22 +1816,32 @@ static void batch_job_free(BJob *j) {
 }
 
 static void *bworker(void *argp) {    BPool *p = (BPool *)argp;
+    /* v0.8.7: one POOLED engine per worker. reset_keep between docs keeps
+     * every page mapped (cnt2's 64 MB, the maps, the book), so docs after
+     * the first on a thread pay zero first-touch faults and zero map
+     * re-growth — the same trick the Engine.reset() path uses. Jobs of one
+     * rc_batch call share uniform params (c/prebits/fast/carry/ids), so a
+     * single core serves the whole thread; any failed job destroys the
+     * pool and the next job rebuilds fresh. */
+    RcCore *pool = NULL;
     for (;;) {
         int idx = atomic_fetch_add(&p->next, 1);
         if (idx >= p->njobs) break;
         BJob *j = &p->jobs[idx];
-        /* ids mode needs the book (intern) and all three output vectors;
-         * starts-only mode stays book-off (the cheaper spans producer) */
-        RcCore *core = core_new(j->c, j->want_ids, PF_DEFAULT, j->prebits,
-                                MAP_CAPBITS_DEFAULT, j->fast, j->carry, 0, 1);
-        if (!core) { j->err = 1; continue; }
+        if (!pool) {
+            pool = core_new(j->c, j->want_ids, PF_DEFAULT, j->prebits,
+                            MAP_CAPBITS_DEFAULT, j->fast, j->carry, 0, 1);
+            if (!pool) { j->err = 1; continue; }
+        } else {
+            core_reset_keep(pool);
+        }
         OutVec ov, ove, ovi;
         ov_init(&ov); ov_init(&ove); ov_init(&ovi);
-        int rc = core_run(core, j->data, j->n, 1, NULL, &ov,
+        int rc = core_run(pool, j->data, j->n, 1, NULL, &ov,
                           j->want_ids ? &ove : NULL,
                           j->want_ids ? &ovi : NULL);
         if (rc == 0)
-            rc = core_flush(core, &ov, j->want_ids ? &ove : NULL,
+            rc = core_flush(pool, &ov, j->want_ids ? &ove : NULL,
                             j->want_ids ? &ovi : NULL);
         if (rc == 0) {
             j->out = ov.a; j->nout = ov.n;
@@ -1841,9 +1851,10 @@ static void *bworker(void *argp) {    BPool *p = (BPool *)argp;
             }
         } else {
             j->err = 1; ov_free(&ov); ov_free(&ove); ov_free(&ovi);
+            core_free(pool); pool = NULL;   /* state suspect: rebuild next */
         }
-        core_free(core);
     }
+    if (pool) core_free(pool);
     return NULL;
 }
 

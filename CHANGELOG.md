@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.8.7 — the batch-throughput release (internal)
+
+The structural work this version started as the order-3 direct array
+and ended somewhere better: two big decomposition experiments rewrote
+what we know about where encode time actually goes, and the kept bet
+delivers the largest single win of the 0.8.x line.
+
+### Kept
+
+- **Batch engine pooling** (C, bworker): one POOLED engine per worker
+  thread, `core_reset_keep` between docs, destroy-and-rebuild only on
+  a failed job. Previously every doc paid a full cold start (64 MB
+  cnt2 first-touch faults, map alloc + growth, book pages). Jobs of
+  one rc_batch call share uniform params, so one core serves the
+  thread. ABBA-interleaved A/B vs v0.8.5 (4 rounds, medians):
+  - 200x5 KB docs, 2 threads (the LM-prep pattern): **2.76 ->
+    17.92 MB/s, -84.6% time (6.5x)**.
+  - 10x267 KB docs, 1 thread: -16.1% time. 2 threads: -20.6% time.
+  Bit-exactness: per-doc cold-judge semantics unchanged (reset path
+  is suite-tested; per-doc outputs identical to fresh engines).
+- **bench_ab.py ABBA upgrade**: rounds alternate A/B run order so
+  host-load drift cannot favor whichever build runs second — caught
+  a machine-drift artifact that had briefly looked like a pooled
+  batch regression on 2 threads.
+
+### Measured and rejected (ledger continues)
+
+- **Order-3 direct array** (16 GB virtual rows, v7-wire-preserving
+  synthesis, entry-count-tracked growth): fully implemented, ALL
+  exactness gates passed (ids equality, snapshot cross-compat both
+  directions, roundtrip semantics), then ABBA-rejected: +0.7-3.3%
+  time on EVERY lane including untouched decode. Mechanism: order-3
+  contexts are numerous AND sparse — dense 1 KB rows touch far more
+  cache lines and ~16x the TLB pages than the map's packed 64 B
+  entries. The probe elimination cannot pay for the storage blowup.
+  **This also kills the naive v0.9 fused-window-slot group design**
+  (same sparse-context blowup applies); exact fused slots are further
+  blocked by shared-prefix state fragmentation (a ctx3 entry cannot
+  live inside one of its 256 ctx4 children without splitting).
+- **popcnt window index** (u16 presence mask in Ent.pad): rejected on
+  paper before implementation — the presence mask is over BYTE VALUES
+  (256 bits), which does not fit the 2 pad bytes; a 64 B Ent cannot
+  hold 16x u16 counts plus a value mask. win_scan is already SWAR and
+  branchless — near-optimal for the layout.
+- Decomposition experiments (throwaway builds, warm lanes): removing
+  orders 4-5 ENTIRELY moves warm throughput only +1% (english) /
+  +4% (base64). The v0.7-era "47% map traffic" figure is obsolete;
+  the warm loop is a serial spine (order 0-2 arrays + FP chain +
+  patcher) with no dominant component. **The v0.9 fused-slot headliner
+  targets a ghost; the roadmap needs rewriting around the batch/
+  parallel-throughput axis this version just proved.**
+
+### Findings for the record
+
+- Snapshot save/load is NOT a byte-level fixpoint (+4 bytes per
+  roundtrip) — verified PRE-EXISTING on v0.8.5, semantically neutral
+  (loaded states continue identically; suite unchanged).
+- core_reserve (6n map presize) is called by the batch path only; the
+  one-shot path still rehashes mid-encode for large corpora — future
+  candidate, no bench-lane effect at current sizes.
+- Suite 18/18 (5:08) on the 0.8.7 engine.
+
 ## v0.8.6 — the measurement-integrity release (internal)
 
 Finding first: single-run benchmarks on this box drift 10-20%

@@ -42,15 +42,18 @@ def best(f, k=3):
     return min(ts)
 
 
-def lanes(rc, BIG, ids):
+def lanes(rc, BIG):
     res = {}
     res["spans_book"] = best(lambda: rc.RateC(c=20, store_book=True).encode_to_spans(BIG))
     res["spans_nobook"] = best(lambda: rc.RateC(c=20, store_book=False).encode_to_spans(BIG))
     e = rc.RateC(c=20, store_book=False)
     e.encode_to_spans(BIG)
     res["warm"] = best(lambda: e.encode_to_spans(BIG))
-    res["ids_book"] = best(lambda: rc.RateC(c=20, store_book=True).encode(BIG))
-    res["decode"] = best(lambda: rc.RateC(c=20, store_book=True).decode_bytes(ids))
+    e2 = rc.RateC(c=20, store_book=True)
+    e2.encode_to_spans(BIG)                      # warm the judge
+    ids2 = e2.encode(BIG)
+    res["ids_book"] = best(lambda: e2.encode(BIG))
+    res["decode"] = best(lambda: e2.decode_bytes(ids2))
     return res
 
 
@@ -74,8 +77,12 @@ def main():
     keys = ("spans_book", "spans_nobook", "warm", "ids_book", "decode")
     samples = {k: {"A": [], "B": []} for k in keys}
     for r in range(args.rounds):
-        a = lanes(A, BIG, ids)
-        b = lanes(B, BIG, ids)
+        # ABBA: alternate the run order per round so host-load drift
+        # cannot systematically favor whichever build runs second
+        if r % 2 == 0:
+            a = lanes(A, BIG); b = lanes(B, BIG)
+        else:
+            b = lanes(B, BIG); a = lanes(A, BIG)
         for k in keys:
             samples[k]["A"].append(a[k])
             samples[k]["B"].append(b[k])
