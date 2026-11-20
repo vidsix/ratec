@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.8.3 — decode gather kernel + export/interop surface (internal)
+
+Research pass: TokenDagger (repo unreachable — 404, nothing on
+record) and wordchipper (docs.rs: compile-time DFA lexers via logos,
+layered vocab views, token-width shrinkage, foldhash/SwissTable,
+aho-corasick special-token scan). Transferable discipline: copy
+volume + dependent-load latency dominate short-record decode; the
+rest has no RateC analog (no regex pretokenizer, ids already uint32,
+maps already open-addressed with rolling hashes).
+
+### Kept
+
+- **decode gather kernel** (C): software-pipelined memcpy fan-out —
+  the next patch's (off, ln) load + arena prefetch issue while the
+  current patch copies. Code fixture: 94.5 -> **117.6 Mids/s
+  (+24%)**; worst-case random-id gather 115.8 (pipeline holds under
+  cache-hostile ids). First implementation shipped a one-patch
+  offset bug (registers overwritten before the copy) — caught by the
+  roundtrip assert, fixed with double-buffered registers.
+- **book export surface**: `Engine.book_dump()` (C, vocabulary as
+  [bytes] with index == id), `to_ranks()` ({bytes: id}, tiktoken
+  ranks semantics), `save_ranks(path)` (.tiktoken format, base64
+  piece + rank). The introspection/interop half of the v0.9 compat
+  story; snapshot wire format untouched.
+- **`encode_files(paths)`** (api.py): gigatoken encode_files parity —
+  multi-file driver over encode_file (verified: separator split [1,2]
+  docs, 54572/54572/1458 patches).
+- **`encode_stream_parallel(chunk=None)`** auto-tune: n/threads
+  clamped to [1, 8] MiB; verified exact tiling (0..n, no gaps) with
+  legitimately different chunk boundaries at cpu_count=2.
+
+### Notes
+
+- Batch persistent thread pool considered and deprioritized: spawn
+  cost (~2 ms/call) is noise against 4 MiB chunk work; revisit only
+  if many-small-docs workloads show up in the profile.
+- Suite 18/18 (5:20) on the 0.8.3 engine.
+
 ## v0.8.2 — the research-driven increments (internal)
 
 Sourced from a survey of tiktoken-adjacent speed work and the

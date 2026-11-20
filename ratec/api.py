@@ -149,7 +149,7 @@ class RateC:
         return [self.decode_bytes(ids) for ids in ids_list]
 
     # --------------------------------------------------- parallel stream
-    def encode_stream_parallel(self, data, chunk: int = 1 << 20,
+    def encode_stream_parallel(self, data, chunk: int | None = 1 << 20,
                                threads: int = 0, head_chunks: int = 1):
         """Encode ONE long stream on many cores by chunking.
 
@@ -161,10 +161,18 @@ class RateC:
         the input exactly and decode round-trips. For bulk LM data prep
         on real (multi-core) boxes this is the throughput mode.
 
+        chunk=None auto-tunes: n/threads clamped to [1, 8] MiB so workers
+        stay balanced and the sequential head stays a small fraction.
+
         Returns [(start, end, id|None), ...] with absolute offsets.
         """
         data = _as_bytes(data)
         n = len(data)
+        if threads <= 0:
+            import os
+            threads = os.cpu_count() or 1
+        if chunk is None:
+            chunk = max(1 << 20, min(8 << 20, n // max(1, threads)))
         if n <= chunk:
             return self.encode_to_spans(data)
         from concurrent.futures import ThreadPoolExecutor
@@ -258,6 +266,30 @@ class RateC:
         if max_docs is not None:
             docs = docs[:max_docs]
         return self.encode_batch(docs, threads=threads)
+
+    def encode_files(self, paths, *, separator: bytes = b"<|endoftext|>",
+                     threads: int = 0, max_docs: int | None = None) -> list:
+        """Multi-file driver (gigatoken encode_files parity): encode_file
+        each path; returns one encode_batch view per file, in order."""
+        return [self.encode_file(p, separator=separator, threads=threads,
+                                 max_docs=max_docs) for p in paths]
+
+    # ------------------------------------------------------------- export
+    def to_ranks(self) -> dict[bytes, int]:
+        """The learned vocabulary as {bytes: id} (tiktoken-ranks parity:
+        introspection, vocab diffs, offline analysis)."""
+        return {piece: i for i, piece in enumerate(self._eng.book_dump())}
+
+    def save_ranks(self, path: str) -> int:
+        """Write the vocabulary in tiktoken's .tiktoken format (base64
+        piece + ' ' + rank per line). Returns the number of entries."""
+        import base64
+        n = 0
+        with open(path, "wb") as f:
+            for i, piece in enumerate(self._eng.book_dump()):
+                f.write(base64.b64encode(piece) + b" %d\n" % i)
+                n += 1
+        return n
 
     # ----------------------------------------------------------- research
     def surprise(self, data) -> np.ndarray:

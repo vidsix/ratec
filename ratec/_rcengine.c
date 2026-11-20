@@ -1585,11 +1585,29 @@ static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
         PyObject *out = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)total);
         if (!out) { PyBuffer_Release(&view); return NULL; }
         uint8_t *wp = (uint8_t *)PyBytes_AS_STRING(out);
-        for (size_t k = 0; k < n; k++) {
-            const uint32_t v = ids[k];
-            memcpy(wp, self->core->book.arena + self->core->book.off[v],
-                   self->core->book.ln[v]);
-            wp += self->core->book.ln[v];
+        /* gather kernel: software-pipeline the arena reads — load the
+         * next patch's (off, ln) and prefetch its first line while the
+         * current one memcpys. Patches are short, so the two dependent
+         * loads per id (ids[k] -> off[v] -> arena) dominate; the
+         * pipeline hides that latency behind the copy. */
+        if (n > 0) {
+            const uint8_t *cur = self->core->book.arena
+                               + self->core->book.off[ids[0]];
+            const uint8_t *nxt = cur;
+            uint32_t lc = self->core->book.ln[ids[0]];
+            uint32_t ln_ = lc;
+            __builtin_prefetch(cur, 0, 1);
+            for (size_t k = 0; k < n; k++) {
+                if (k + 1 < n) {
+                    const uint32_t v1 = ids[k + 1];
+                    nxt = self->core->book.arena + self->core->book.off[v1];
+                    ln_ = self->core->book.ln[v1];
+                    __builtin_prefetch(nxt, 0, 1);
+                }
+                memcpy(wp, cur, lc);
+                wp += lc;
+                cur = nxt; lc = ln_;
+            }
         }
         PyBuffer_Release(&view);
         return out;
@@ -1675,6 +1693,27 @@ static PyObject *gs_repr(EngineObj *self) {
         (unsigned long long)(self->core->store_book ? self->core->book.n : 0));
 }
 
+/* book_dump: the vocabulary as a list of bytes, index == id. The
+ * introspection/export surface (tiktoken-ranks parity): enables
+ * to_ranks(), vocab diffs, and offline analysis without touching the
+ * snapshot wire format. */
+static PyObject *Engine_book_dump(EngineObj *self, PyObject *unused) {
+    if (!self->core->store_book) {
+        PyErr_SetString(RatecError, "book_dump requires store_book=True");
+        return NULL;
+    }
+    Book *b = &self->core->book;
+    PyObject *lst = PyList_New((Py_ssize_t)b->n);
+    if (!lst) return NULL;
+    for (size_t id = 0; id < b->n; id++) {
+        PyObject *piece = PyBytes_FromStringAndSize(
+            (const char *)(b->arena + b->off[id]), (Py_ssize_t)b->ln[id]);
+        if (!piece) { Py_DECREF(lst); return NULL; }
+        PyList_SET_ITEM(lst, (Py_ssize_t)id, piece);
+    }
+    return lst;
+}
+
 static PyMethodDef Engine_methods[] = {
     {"feed",         (PyCFunction)Engine_feed,         METH_O,
      "feed(data) -> [(start, end, id|None)]; patches closed by this chunk.\n"
@@ -1694,6 +1733,8 @@ static PyMethodDef Engine_methods[] = {
      "reset() -> cold engine (fresh tables)."},
     {"save_state",   (PyCFunction)Engine_save_state,   METH_NOARGS,
      "save_state() -> bytes snapshot of the full engine state."},
+    {"book_dump",    (PyCFunction)Engine_book_dump,    METH_NOARGS,
+     "book_dump() -> [bytes, ...] the vocabulary, index == id."},
     {NULL, NULL, 0, NULL}
 };
 static PyGetSetDef Engine_getset[] = {
