@@ -112,3 +112,22 @@ def test_parallel_intern_requires_book():
         r._eng.intern_spans_parallel(
             b"abc", np.asarray([0], dtype=np.uint32).tobytes(),
             np.asarray([3], dtype=np.uint32).tobytes(), 2)
+
+
+def test_warm_engine_spans_tile_their_input():
+    """v0.9.0rc regression: a warm engine's lifetime position must not
+    leak into encode_to_spans offsets (the intern path's tiling
+    validation caught the leak)."""
+    data = b"abc" * 1000
+    r = ratec.RateC(c=20, store_book=True)
+    first = r.encode_stream_parallel(data, ids=True)
+    assert r.decode_bytes(first[2]) == data
+    # second call: the engine is warm now — spans must still tile
+    second = r.encode_stream_parallel(data, ids=True)
+    assert r.decode_bytes(second[2]) == data
+    s, e = r.encode_to_spans(data[:300], as_arrays=True)
+    assert int(s[0]) == 0 and int(e[-1]) == 300
+    for st, en, _i in r.encode_to_spans(data[:300]):
+        pass
+    tup = r.encode_to_spans(data[:300])
+    assert tup[0][0] == 0 and tup[-1][1] == 300

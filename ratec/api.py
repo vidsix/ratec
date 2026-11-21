@@ -210,7 +210,7 @@ class RateC:
         workers off the GIL (the per-span tuple build serialized all
         workers and cost ~0.3-0.5 s per 10.7 MiB).
 
-        ids=True (v0.9.0b) adds the token stream: returns (starts, ends,
+        ids=True (v0.9.0) adds the token stream: returns (starts, ends,
         ids) uint32 ndarrays where ids[k] indexes THIS instance's book in
         first-seen order. The parallel workers stay bookless; a single
         sequential intern-only pass (Engine.intern_spans) assigns ids
@@ -397,13 +397,32 @@ class RateC:
         uint32 ndarrays instead of per-span tuples — the same values
         with ~50x less Python-object allocation (the tuple path costs
         ~3 objects per span, GIL-held; arrays are two memcpys + two
-        numpy wraps)."""
+        numpy wraps). Spans tile THIS call's input (start 0, end
+        len(data)) on warm engines too — v0.9.0rc rebases the engine's
+        lifetime stream position out; feed()/flush() keep
+        lifetime-absolute spans as documented."""
         data = _as_bytes(data)
+        # The C emit is absolute in the engine's LIFETIME stream; the
+        # spans contract is "tile THIS call's input exactly" (v0.9.0rc
+        # fix: warm engines leaked their consumed-bytes counter into
+        # start/end and the intern path's tiling validation caught it).
+        # feed()/flush() keep their documented lifetime-absolute spans.
         if as_arrays:
             sb, eb = self._eng.encode_spans_raw(data)
-            return (np.frombuffer(sb, dtype=np.uint32),
-                    np.frombuffer(eb, dtype=np.uint32))
-        return self._spans(data)
+            starts = np.frombuffer(sb, dtype=np.uint32)
+            ends = np.frombuffer(eb, dtype=np.uint32)
+            if len(starts):
+                base = int(starts[0])
+                if base:
+                    starts = starts - base
+                    ends = ends - base
+            return (starts, ends)
+        spans = self._spans(data)
+        if spans:
+            base = spans[0][0]
+            if base:
+                spans = [(st - base, en - base, i) for (st, en, i) in spans]
+        return spans
 
     def encode_batch(self, docs: Sequence, threads: int = 0):
         """Parallel spans for independent docs (bookless, GIL released).

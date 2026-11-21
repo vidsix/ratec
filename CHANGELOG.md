@@ -34,6 +34,19 @@ carries the performance contract forward with fresh measured numbers.
   K-invariance, warm-book identity, api roundtrips at intern_threads
   1/4, stress shapes, bad-tiling and bookless rejections).
 
+### Fixed (the polish-pass catch)
+
+- **`encode_to_spans` on a warm engine leaked the engine's lifetime
+  stream position into the span offsets** (a 300-byte call on an engine
+  that had consumed 3000 bytes returned spans starting at 3000; the
+  as_arrays path drifted further after each call). The contract says
+  spans tile THIS call's input; both the tuple and the as_arrays paths
+  now rebase to the call (start 0, end len(data)). `feed()`/`flush()`
+  keep their documented lifetime-absolute semantics. Found BY the
+  parallel intern's tiling validation on the second call of a
+  bench-style loop — the check did its job. Regression test:
+  `test_warm_engine_spans_tile_their_input`.
+
 ### Honest ledger
 
 - The pipelined intern (merge overlapped into the worker pool) was

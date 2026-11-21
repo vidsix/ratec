@@ -76,7 +76,7 @@ cold-start on its own engine, GIL released. Identical per-doc ids to a
 fresh sequential engine; the fastest path when the corpus is many
 small/medium docs instead of one long stream.
 
-**`fast=True` (the FST lane)** — `RateC(c=20, exact=False)`: identical
+**`exact=False` (the fast lane)** — `RateC(c=20, exact=False)`: identical
 structure, approximate log2. Historically +2.5–7.5% over the exact lane
 on this box (host-dependent); its outputs are NOT stable across
 versions and may differ from the exact lane's segmentation (documented
@@ -110,6 +110,9 @@ assigns the sequential first-seen ids for ANY chunking.
 | v0.8.8 | runs mode (zero per-chunk resets) | 14.6 → 20.6 MB/s thr=8 |
 | v0.8.9 | tuple-free span output + parallel decode_batch | spans 12.42 → 14.48 MB/s seq; decode 120 → 177 Mids/s thr=2 |
 | v0.9.0b | `ids=True` intern pass + tiling theorems | token stream ≈ free over spans-only |
+| v0.9.0 | thread-parallel intern (`intern_threads`) + S5 theorems | intern pass 2.2–2.6× warm / 1.4× cold; ids lane ≈ spans lane |
 
-Reproduce everything: `make check` (suite + bit-exactness + fuzz gates)
-and `python -c "import ratec; ratec.bench()"`.
+Reproduce everything: `make check` (suite + bit-exactness + fuzz gates),
+`python -c "import ratec; ratec.bench()"` for the table, and the LEAN
+files under `lean/` with a Lean 4 toolchain (`lean lean/RatecIntern.lean`
+must print nothing).

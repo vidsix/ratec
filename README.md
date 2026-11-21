@@ -6,13 +6,17 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.6.0, experimental. The C core and byte-level semantics are
+> **Status:** v0.9.0rc, experimental. The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
-> committed records (`make tables`). The LM-side surface (`ratec.smollm2`)
-> may still move. Code-first repo: run `tests/` and `bench/` yourself — no
-> benchmark claims against SOTA in this README. Independently replicated:
-> an external gate (tiling/parity/carry/fractional-C monotonicity) passes
+> committed records (`make tables`) and the performance contract lives in
+> [BENCHMARKS.md](BENCHMARKS.md) with `ratec.bench()`. The execution-model
+> claims (tiling for any surprisal function, parallel-intern id
+> equivalence) are machine-checked in `lean/` (Lean 4, no mathlib,
+> no `sorry`). The LM-side surface (`ratec.smollm2`) may still move.
+> Code-first repo: run `tests/` and `bench/` yourself — no benchmark
+> claims against SOTA in this README. Independently replicated: an
+> external gate (tiling/parity/carry/fractional-C monotonicity) passes
 > on foreign boxes, and the base64 fertility number replicates exactly.
 
 ```
@@ -43,6 +47,12 @@ ratec.RateC(c=20, exact=False)           # fast lane (poly log2, ~1 ulp)
 ratec.RateC(c=20, store_book=False)      \
     .encode_stream_parallel(             # ONE stream on many cores
         blob, chunk=1<<20, threads=N)
+
+starts, ends, ids = ratec.RateC(c=20, store_book=True).encode_stream_parallel(
+    blob, ids=True)                      # + LM-prep token stream (ids)
+                                         # intern_threads=N parallelizes the
+                                         # intern pass (default = threads)
+ratec.bench()                            # the measured contract (BENCHMARKS.md)
 ```
 
 ## Why it is different
@@ -95,12 +105,15 @@ Core methods (tiktoken-shaped where it makes sense):
 | `feed(b)` / `flush()` | streaming: patches closed by each chunk; spans are absolute |
 | `encode_batch(docs, threads)` | parallel, GIL released, one cold engine per doc |
 | `encode_stream_parallel(data, chunk, threads, head_chunks)` | ONE stream on many cores: sequential head + snapshot-seeded chunk workers (ffmpeg-style approximation, deterministic, tiles exactly) |
+| `encode_stream_parallel(…, ids=True, intern_threads=k)` | the same parallel spans **plus the token stream**: uint32 patch ids, bit-exact vs the sequential engine for any thread count; the intern pass itself runs on `intern_threads` workers (default = `threads`) |
 | `save_state()` / `RateC.from_state(x)` | full snapshot (judge + patcher + book) |
 | `reset()` | in-place clear, page-granular via dirty-bitmaps (cost ∝ touched pages) |
 
 Module-level: `ratec.patch_from_sur(sur, c)` (re-patch a stored surprisal at
 any C — the judge pass is C-independent, so C-sweeps are nearly free),
-`ratec.batch_spans(docs, c, threads)`, `ratec.RatecError`.
+`ratec.batch_spans(docs, c, threads)`, `ratec.bench()` (the measured
+performance contract of [BENCHMARKS.md](BENCHMARKS.md)),
+`ratec.RatecError`.
 
 CLI: `python -m ratec encode|decode|surprise|state|bench …`
 
@@ -157,6 +170,43 @@ Patch counts and MB/s are measured together in `bench/bench_c_sweep.py`;
 the carry/deferred-performance record (incl. why the SIMD patcher is a
 5.5%-ceiling defer) lives in `docs/v04_design.md`. Container spec draft:
 `docs/container.md`.
+
+## The ids lane (v0.8–v0.9): LM data prep at speed
+
+LM prep wants patch ids at bulk throughput. The path grew in three
+steps, all measured against the same 10.7 MiB english corpus:
+
+* **v0.8 — the sequential ids path** (rolling-hash intern, merged book
+  slots): `encode_bytes` / `batch_encode` went 1.8 → 5.5 MB/s cold and
+  4.1 → 7.4 MB/s warm. `ratec.batch_encode(docs, c, threads)` fans many
+  independent documents over cold engines, GIL released — identical
+  per-doc ids to a fresh sequential engine.
+* **v0.9.0b — the token stream on the parallel path**:
+  `encode_stream_parallel(blob, ids=True)` returns
+  `(starts, ends, ids)` — the workers stay bookless and GIL-free and a
+  single intern-only pass turns the finished span tiling into ids.
+* **v0.9.0 — the intern pass itself goes parallel** (`intern_threads`,
+  default = `threads`): workers intern contiguous chunks into PRIVATE
+  open-addressing tables (zero content copies), pre-probe their
+  distinct patches against the frozen book (hits resolve immediately),
+  then one ordered merge interns only the misses and a parallel gather
+  remaps. Intern pass: **2.23–2.62× warm / 1.37–1.43× cold** vs
+  sequential; the ids lane now sits a few percent behind the spans-only
+  lane instead of ~10%.
+
+Correctness is the headline, not just speed: interning is a pure
+function of span contents + order, so the ids are **bit-exactly the ids
+a sequential engine produces for the same spans — for any thread
+count**. Verified by tests (K = 2…16, warm-book identity, round-trips,
+stress shapes) and machine-checked in `lean/RatecIntern.lean` (S5: the
+chunked merge assigns the sequential first-seen ids for ANY chunking;
+Lean 4, no mathlib, no `sorry` — verify with
+`lean lean/RatecIntern.lean`). The tiling is validated in C before any
+interning, so `decode_bytes(ids)` round-trips exactly, and the book
+persists across calls: repeated streams share one vocabulary.
+
+Full contract and per-entry numbers: [BENCHMARKS.md](BENCHMARKS.md);
+architecture and invariants: `docs/ARCHITECTURE.md`.
 
 ## Semantics (the precise bits)
 
@@ -313,16 +363,9 @@ plus: no vocab file, any C at runtime, byte-native multimodality, and
 real multi-core throughput via `batch_spans` / `batch_encode`
 (independent docs) and `encode_stream_parallel` (one stream, chunked
 from a snapshot — measured in this sandbox at ~1.7× on 2 threads for
-the parallel section, scaling
-
-Ids-path speed (LM data prep with book ids; the numbers behind
-`docs/ARCHITECTURE.md`): **5.5 MB/s cold / 7.4 MB/s warm** single
-engine after the rolling-hash intern and merged book slots — up from
-1.8 / 4.1 at the cycle's start. Single-threaded `batch_encode` on many
-docs matches this per-doc; on 2 threads it exceeded the single-engine
-warm rate in aggregate. Architecture, invariants and the defaults
-audit: `docs/ARCHITECTURE.md`.
-with cores on real machines). The honest verdict: exact RateC does ~100×
+the parallel section, scaling with cores on real machines). The
+ids lane adds the LM-prep token stream on the same parallel path (see
+"The ids lane" above). The honest verdict: exact RateC does ~100×
 more arithmetic per byte than a merge lookup and currently trades speed
 for compression; the fast lane and the profiler roadmap below are the
 paths to raw speed.
@@ -399,7 +442,23 @@ paths to raw speed.
     (`prune=True`, opt-in, default path byte-identical, snapshot v7) with
     its own LM measurement (`research/book_pruning.json`), plus the
     LM-optimal C sweep (`research/lm_c_sweep.json`). Plan:
-    `docs/PLAN_v0.7.md`.
+    `docs/PLAN_v0.7.md`.15. **~~The ids-path speed campaign~~ done (v0.8.x)** — rolling-hash
+    intern + merged book slots (sequential ids 1.8 → 5.5 MB/s cold,
+    4.1 → 7.4 warm), `batch_encode` (thread-parallel per-doc ids),
+    tuple-free span output (`as_arrays=True`, GIL-free C buffers),
+    runs-mode multi-stream encoding, parallel `decode_batch`
+    (120 → 177 Mids/s at 2 threads), prefetch BETs (order-2 exact-line
+    shipped, cmap rejected +2.3–8.7%), snapshot hardening fuzz gate,
+    `ratec.bench()` + BENCHMARKS.md performance contract. Internals
+    recorded per release in CHANGELOG; plans in `docs/PLAN_v0.8.md`.
+16. **~~The parallel intern~~ done (v0.9.0)** — `ids=True` token stream
+    with a thread-parallel intern pass (`intern_threads`), ids
+    bit-exact vs sequential for ANY thread count, machine-checked in
+    `lean/` (RatecSerial/RatecTiling/RatecIntern — execution model,
+    tiling, intern equivalence). The pipelined variant was measured,
+    found unsound (book growth vs concurrent pre-probes) and reverted;
+    the barriered design kept the warm-book win. See BENCHMARKS.md.
+
 
 ## Layout
 
@@ -417,11 +476,23 @@ tests/
                      snapshot v5 + v4 back-compat, servos
   test_profiles.py   profile round-trips + predictability wins
   test_smollm2_port.py   freeze / roundtrip / fallback / specials / config
+  test_stream_ids.py     the ids=True token stream contract
+  test_intern_parallel.py  parallel intern: K-equality/invariance, warm
+                         book identity, api roundtrips, stress shapes
+  test_raw_arrays_decode.py  tuple-free span arrays + parallel decode
+  test_speed_floor.py    per-lane speed floors (regression alarms)
 bench/
   bench_vs_tiktoken.py   fertility table above, reproducible
   bench_c_sweep.py       tokens/byte + MB/s across C, golden-verified per C
   bench_scale.py         efficiency vs adaptation scale (the thesis, measured)
+lean/
+  RateC.lean             the vocabulary model (pure Lean 4, no mathlib)
+  RatecSerial.lean       the execution model (no-sorry theorems)
+  RatecTiling.lean       tiling for ANY surprisal function (S1–S4)
+  RatecIntern.lean       parallel-intern id equivalence (S5)
 docs/
+  ARCHITECTURE.md    ids-path architecture, invariants, defaults audit
+  PLAN_v0.8.md       the v0.8 plan (speed campaign)
   smollm2_port.md    the LM port, precisely
   PROFILING.md       the ablation profile behind the v2 engine
   v04_design.md      what landed / was measured / was declined, with numbers
