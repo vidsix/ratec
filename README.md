@@ -6,7 +6,7 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.9.0rc, experimental. The C core and byte-level semantics are
+> **Status:** v0.9.0, experimental. The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -54,6 +54,39 @@ starts, ends, ids = ratec.RateC(c=20, store_book=True).encode_stream_parallel(
                                          # intern pass (default = threads)
 ratec.bench()                            # the measured contract (BENCHMARKS.md)
 ```
+
+## What changed in v0.9.0 — the improvement record
+
+The one-line version: **LM-prep token streams are now a multi-core,
+machine-checked path, and the ids lane sits within 8% of the
+spans-only lane** — after a cycle that took the sequential ids path
+from 1.8 to 5.5 MB/s cold (4.1 to 7.4 warm).
+
+**The v0.7 → v0.9.0 arc on the 10.7 MiB english corpus.** Absolute
+MB/s are host-day-dependent — [BENCHMARKS.md](BENCHMARKS.md) explains
+why and what stays stable; the deltas are the story:
+
+| step | what landed | measured effect (that host-day) |
+|---|---|---|
+| v0.8.x | rolling-hash intern + merged book slots; `batch_encode`; tuple-free raw span output; parallel decode | sequential ids **1.8 → 5.5 MB/s cold, 4.1 → 7.4 warm**; spans **+16%** (12.42 → 14.48 MB/s); decode **120 → 177 Mids/s** @ 2 threads |
+| v0.8.8 | runs mode: one state clone per run, zero per-chunk resets | 14.6 → **20.6 MB/s** @ 8 threads |
+| v0.9.0b | `ids=True` — the token stream on the parallel path, + tiling theorems | ids ≈ spans lane minus a serial intern pass |
+| v0.9.0 | thread-parallel intern (`intern_threads`) + S5 machine-check + the warm-engine ids fix | intern pass **2.23–2.62× warm / 1.37–1.43× cold**; ids lane **23.93 vs 26.04 MB/s** spans in the shipped `ratec.bench()` |
+
+v0.9.0's own delta, in short:
+
+* **Parallel intern**: private per-worker tables → read-only pre-probe
+  against the frozen book → one ordered merge; the ids are bit-exactly
+  the sequential engine's for ANY thread count (tests K = 2…16, and
+  LEAN `RatecIntern.lean` S5 — no `sorry`).
+* **The warm-engine fix**: the second `encode_stream_parallel(ids=True)`
+  call on one engine used to fail the tiling validation; fixed in the
+  ids path with a regression test (details in CHANGELOG).
+* **`lean/` ships in the repo** — every execution-model claim is
+  machine-checked and verifiable: `lean lean/RatecIntern.lean` prints
+  nothing.
+* Gates at release: `make test` green (tables 4/4, fuzz 12/12,
+  bit-exactness), `pytest tests/` 43/43.
 
 ## Why it is different
 
@@ -117,7 +150,7 @@ performance contract of [BENCHMARKS.md](BENCHMARKS.md)),
 
 CLI: `python -m ratec encode|decode|surprise|state|bench …`
 
-## LM interface (v0.3): HF tokenizer + SmolLM2 port
+## The LM interface: HF tokenizer + SmolLM2 port (v0.3)
 
 `ratec.smollm2` turns a RateC snapshot into a first-class HF tokenizer for
 Llama-family training — details in `docs/smollm2_port.md`. The shape:
@@ -143,7 +176,7 @@ Key properties: any text round-trips **byte-exactly** with a frozen vocab;
 `encode_for_lm` is the MegaByte/BLT-style `(id, byte_length)` contract;
 special tokens live in a reserved id block that never collides with the book.
 
-## v0.4: fractional C, carry-over patcher, servo, profiles
+## Fractional C, carry-over patcher, servos, modality profiles (v0.4)
 
 ```python
 import ratec
