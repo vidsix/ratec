@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.9.0 — the parallel-intern release (token streams at full speed)
+
+The beta's ~10% ids-lane gap is closed: the intern pass itself is now
+thread-parallel, its correctness is machine-checked, and the release
+carries the performance contract forward with fresh measured numbers.
+
+### Kept
+
+- **`Engine.intern_spans_parallel` + `intern_threads`**: the ids side
+  of stream-parallel encoding is multi-core. Workers intern contiguous
+  chunks of the span array into PRIVATE open-addressing tables (zero
+  content copies), pre-probe their distinct patches against the frozen
+  book (hits resolve immediately), then ONE ordered merge interns only
+  the misses and a parallel gather remaps. The ids are bit-exactly the
+  sequential pass's for ANY thread count (tests: K = 2…16; the pass
+  barriered so the merge never overlaps the read-only pre-probes —
+  a pipelined first attempt did overlap them and raced the book's
+  hash-table growth: segfault on cold books, reverted, documented).
+  Measured on the 10.7 MiB corpus: cold book 1.37–1.43×, warm book
+  (repeated streams, one vocabulary — the LM-prep case) 2.23–2.62×.
+- **LEAN `RatecIntern.lean`** (fourth machine-checked file, no sorry):
+  S5 — the chunked merge assigns the sequential first-seen ids for ANY
+  chunking (`ids_par_eq_seq`), via `novel_append` (the merge
+  decomposes per chunk) and `mergeFold_eq` (the merge computes the
+  global first-seen order).
+- **BENCHMARKS.md + `ratec.bench()`** refreshed: the ids row now
+  documents `intern_threads` and the pass-level cold/warm numbers.
+- Suite 42/42 (35 + 7 new parallel-intern tests: K-equality,
+  K-invariance, warm-book identity, api roundtrips at intern_threads
+  1/4, stress shapes, bad-tiling and bookless rejections).
+
+### Honest ledger
+
+- The pipelined intern (merge overlapped into the worker pool) was
+  implemented, measured (1.39–1.49×), then found UNSOUND — the
+  pre-probe reads the book while the merge inserts and grows its hash
+  table (use-after-free segfault on cold books). The barriered design
+  keeps the warm-book win (pre-probe hits are what shrink the serial
+  merge) and drops the overlap.
+- The beta's FST-lane AVX2 rejection record stands (see v0.9.0b).
+
+### Gates
+
+`make test` green (7 scripts, fuzz gate, bit-exactness gate),
+`pytest tests/` 42/42.
+
 ## v0.9.0b — the token-stream beta (ids for stream-parallel encoding)
 
 The beta for v0.9.0: the parallel path finally emits the LM-prep token

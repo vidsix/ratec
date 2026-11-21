@@ -21,7 +21,7 @@ text/code/UTF-8 stream, c=20, threads=2, best-of-3)
 | `RateC.encode_bytes`               | 17.78  | sequential judge+patcher, ids + book |
 | `RateC.encode_to_spans`            | 18.01  | tuple-free `as_arrays=True` output — ≈ encode_bytes (the v0.8.9 GIL-free raw path) |
 | `RateC.encode_stream_parallel`     | 24.52  | runs mode, threads=2, spans only |
-| `…encode_stream_parallel(ids=True)`| 25.05  | v0.9.0b: spans **+ token stream**; the sequential intern pass is ≈ free at this speed (adds ~5–15% time on slower hosts) |
+| `…encode_stream_parallel(ids=True)`| 23.93  | v0.9.0: spans **+ token stream**; the intern pass is itself thread-parallel (`intern_threads`, default = threads) — warm books make it ≈ free, cold books pay the ordered distinct-insert merge |
 | `RateC.decode_bytes`               | 13423  | memcpy/hash-bound book read; scales with `decode_batch(threads=k)` (v0.8.9: 120 → 177 Mids/s at 2 threads on the same corpus shape) |
 | `ratec.batch_encode`               | 28.60  | per-doc cold engines, thread-parallel, 1 MiB docs |
 
@@ -48,15 +48,23 @@ worker clones the head state ONCE and encodes one contiguous run —
 Scales with cores until the sequential head dominates; spans tile the
 input exactly, so decode round-trips.
 
-**`ids=True` (v0.9.0b)** — adds the LM-prep token stream to the
-parallel path. The workers stay bookless and GIL-free; ONE sequential
-intern-only pass (`Engine.intern_spans`) walks the finished spans,
-recomputes each patch's fnv-1a, and interns into this instance's book.
-Because interning is a pure function of span contents + order, the ids
-are bit-exactly the ids a sequential engine produces for the same
-spans (verified by test), and the tiling is validated in C before any
-interning, so `decode_bytes(ids)` round-trips exactly. The book
-persists across calls: repeated streams share one vocabulary.
+**`ids=True` + `intern_threads` (v0.9.0)** — adds the LM-prep token
+stream to the parallel path. The workers stay bookless and GIL-free;
+a thread-parallel intern pass (`Engine.intern_spans_parallel`,
+`intern_threads` workers, default = the stream's `threads`) interns
+contiguous chunks of the span array into PRIVATE open-addressing
+tables (zero content copies), pre-probes its distinct patches against
+the frozen book (hits resolve immediately), then ONE ordered merge
+interns only the misses into this instance's book and a parallel
+gather remaps. Because interning is a pure function of span contents
++ order, the ids are bit-exactly the ids a sequential engine produces
+for the same spans — for ANY thread count (machine-checked in
+`RatecIntern.lean`, verified by tests for K = 2…16), and the tiling is
+validated in C before any interning, so `decode_bytes(ids)`
+round-trips exactly. The book persists across calls: repeated streams
+share one vocabulary. Measured at the pass level on the 10.7 MiB
+corpus: cold book 1.37–1.43×, warm book (the repeated-stream LM-prep
+case) 2.23–2.62× vs the sequential intern.
 
 **`decode_bytes` / `decode_batch`** — pure book read (no judge).
 `decode_bytes` takes the whole id array through the C buffer fast path;
@@ -72,10 +80,11 @@ small/medium docs instead of one long stream.
 structure, approximate log2. Historically +2.5–7.5% over the exact lane
 on this box (host-dependent); its outputs are NOT stable across
 versions and may differ from the exact lane's segmentation (documented
-deviation). The v0.9.0b LEAN companion (`RatecTiling.lean`) proves the
-structural guarantee that makes this safe: the patcher's tiling is
-correct for ANY surprisal function, so approximation can never break
-the round-trip.
+deviation). The LEAN companions (`RatecTiling.lean` v0.9.0b,
+`RatecIntern.lean` v0.9.0) prove the structural guarantees: the
+patcher's tiling is correct for ANY surprisal function, so
+approximation can never break the round-trip, and the parallel intern
+assigns the sequential first-seen ids for ANY chunking.
 
 ## What was tried and rejected (the honest ledger)
 
