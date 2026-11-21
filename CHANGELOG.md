@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.9.0 — the parallel-intern release (token streams at full speed)
+## v0.9.0rc — release candidate: the parallel-intern release (token streams at full speed)
+
+> RC for the v0.9.0 final. Same code the final will ship; released to
+> freeze the surface for the docs/polish pass.
 
 The beta's ~10% ids-lane gap is closed: the intern pass itself is now
 thread-parallel, its correctness is machine-checked, and the release

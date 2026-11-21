@@ -1,4 +1,8 @@
-# v0.9.0 release notes — parallel intern, machine-checked token streams
+# v0.9.0rc release notes — release candidate: parallel intern, machine-checked token streams
+
+> Release candidate. The final v0.9.0 ships this code unchanged unless
+> the polish pass surfaces something; the docs pass happens between RC
+> and final.
 
 v0.9.0 closes the gap the beta named: the token stream (ids=True) no
 longer pays a serial intern pass — interning is multi-core, its
@@ -43,5 +47,5 @@ warm books, the repeated-stream LM-prep pattern, make it nearly free).
 ## Gates
 
 `make test` green (7 scripts, fuzz 12/12, bit-exactness gate),
-`pytest tests/` 42/42. Version 0.9.0, single-sourced from
+`pytest tests/` 42/42. Version 0.9.0rc0, single-sourced from
 pyproject.toml.
