@@ -143,15 +143,33 @@ class RateC:
             return self._dec(ids)
         return self._dec(list(ids))
 
-    def decode_batch(self, ids_list: Sequence[Sequence[int]]) -> list[bytes]:
-        """Decode many id sequences (one engine pass each; the book is
-        shared, so ids must come from this instance's state)."""
-        return [self.decode_bytes(ids) for ids in ids_list]
+    def decode_batch(self, ids_list: Sequence[Sequence[int]],
+                     threads: int = 0) -> list[bytes]:
+        """Decode many id sequences on the engine's C thread pool (v0.8.9).
+
+        Decoding is a PURE READ of the book (ids -> ln/off -> arena, no
+        judge, no state change), so all sequences share ONE engine with
+        the GIL released — parallel bounds-check + parallel gather, no
+        clones. Buffer inputs (numpy uint32 / array('I') / bytes) take
+        the parallel path; other sequences fall back to the sequential
+        loop (decode_bytes validates arbitrary int lists). The book is
+        shared, so ids must come from this instance's state."""
+        arrs = []
+        for ids in ids_list:
+            arr = getattr(ids, "dtype", None)
+            if arr is not None and ids.dtype == np.uint32 and ids.ndim == 1:
+                arrs.append(ids)
+            elif isinstance(ids, (bytes, bytearray, memoryview)):
+                arrs.append(ids)
+            else:
+                # unvalidatable int lists: keep the exact sequential path
+                return [self.decode_bytes(ids) for ids in ids_list]
+        return list(self._eng.decode_batch(arrs, threads=threads))
 
     # --------------------------------------------------- parallel stream
     def encode_stream_parallel(self, data, chunk: int | None = 1 << 20,
                                threads: int = 0, head_chunks: int = 1,
-                               mode: str = "runs"):
+                               mode: str = "runs", as_arrays: bool = False):
         """Encode ONE long stream on many cores by chunking.
 
         The first `head_chunks` chunks run sequentially (exact judge
@@ -184,7 +202,11 @@ class RateC:
         the sequential fraction minimal; raise it when patch boundaries
         must track the single-engine view more closely.
 
-        Returns [(start, end, id|None), ...] with absolute offsets.
+        Returns [(start, end, id|None), ...] with absolute offsets, or
+        with as_arrays=True (v0.8.9) a (starts, ends) pair of uint32
+        ndarrays carrying the same values — tuple-free output keeps the
+        workers off the GIL (the per-span tuple build serialized all
+        workers and cost ~0.3-0.5 s per 10.7 MiB).
         """
         if mode not in ("runs", "snapshot"):
             raise ValueError("mode must be 'runs' or 'snapshot'")
@@ -196,7 +218,7 @@ class RateC:
         if chunk is None:
             chunk = max(1 << 20, min(8 << 20, n // max(1, threads)))
         if n <= chunk:
-            return self.encode_to_spans(data)
+            return self.encode_to_spans(data, as_arrays=as_arrays)
         from concurrent.futures import ThreadPoolExecutor
 
         head = min(max(0, head_chunks), (n + chunk - 1) // chunk - 1)
@@ -205,12 +227,23 @@ class RateC:
                               pf=self._eng.pf, exact=True,
                               carry=self._eng.carry_mode)
         out = []
+        head_starts, head_ends = [], []
         consumed = 0
         for k in range(head):
             seg = data[k * chunk: (k + 1) * chunk]
-            out.extend(eng_head.feed(seg))
+            if as_arrays:
+                sb, eb = eng_head.feed_raw(seg)
+                head_starts.append(np.frombuffer(sb, dtype=np.uint32))
+                head_ends.append(np.frombuffer(eb, dtype=np.uint32))
+            else:
+                out.extend(eng_head.feed(seg))
             consumed += len(seg)
-        out.extend(eng_head.flush())          # close open tail at the boundary
+        if as_arrays:
+            sb, eb = eng_head.flush_raw()   # close open tail at the boundary
+            head_starts.append(np.frombuffer(sb, dtype=np.uint32))
+            head_ends.append(np.frombuffer(eb, dtype=np.uint32))
+        else:
+            out.extend(eng_head.flush())
         # v0.8.8: seed workers by CLONING the head engine (bit-identical
         # judge state, no wire roundtrip, no map rebuild) and pre-sizing
         # its maps for head + one chunk, so no chunk ever rehashes mid-run.
@@ -235,6 +268,11 @@ class RateC:
                 try:
                     # a fresh clone already carries the head state; restores
                     # are only needed on REUSE (never in this mode)
+                    if as_arrays:
+                        sb, eb = eng.encode_spans_raw(data[a:b])
+                        off = a - nseen0
+                        return w, (np.frombuffer(sb, dtype=np.uint32) + off,
+                                   np.frombuffer(eb, dtype=np.uint32) + off)
                     sp = eng.encode_spans(data[a:b])
                 finally:
                     pool.put(eng)
@@ -250,6 +288,12 @@ class RateC:
             with ThreadPoolExecutor(max_workers=nworkers) as ex:
                 for w, spans_part in ex.map(lambda j: run(*j), jobs):
                     spans_parts[w] = spans_part
+            if as_arrays:
+                sa = head_starts + [p[0] for p in spans_parts if p is not None]
+                ea = head_ends + [p[1] for p in spans_parts if p is not None]
+                if len(sa) > 1:
+                    return (np.concatenate(sa), np.concatenate(ea))
+                return (sa[0].copy(), ea[0].copy())
             for part in spans_parts:
                 if part:
                     starts_all.extend(part)
@@ -259,6 +303,11 @@ class RateC:
             eng = pool.get()
             try:
                 eng.restore_from(eng_head)
+                if as_arrays:
+                    sb, eb = eng.encode_spans_raw(data[a:b])
+                    off = a - nseen0
+                    return (np.frombuffer(sb, dtype=np.uint32) + off,
+                            np.frombuffer(eb, dtype=np.uint32) + off)
                 sp = eng.encode_spans(data[a:b])
             finally:
                 pool.put(eng)
@@ -274,17 +323,35 @@ class RateC:
             jobs.append((pos, nxt))
             pos = nxt
         with ThreadPoolExecutor(max_workers=nworkers) as ex:
-            for spans_part in ex.map(lambda ab: run(*ab), jobs):
-                starts_all.extend(spans_part)
+            parts = list(ex.map(lambda ab: run(*ab), jobs))
+        if as_arrays:
+            sa = head_starts + [p[0] for p in parts]
+            ea = head_ends + [p[1] for p in parts]
+            if len(sa) > 1:
+                return (np.concatenate(sa), np.concatenate(ea))
+            return (sa[0].copy(), ea[0].copy())
+        for spans_part in parts:
+            starts_all.extend(spans_part)
         return out + starts_all
 
     # ----------------------------------------------------------- bytes API
     def encode_bytes(self, data) -> list[int]:
         return self._enc(bytes(data))
 
-    def encode_to_spans(self, data) -> list[tuple[int, int, int | None]]:
-        """byte spans [(start, end, id|None), ...] — the LM-facing view."""
-        return self._spans(_as_bytes(data))
+    def encode_to_spans(self, data, as_arrays: bool = False):
+        """byte spans [(start, end, id|None), ...] — the LM-facing view.
+
+        as_arrays=True (v0.8.9) returns (starts, ends) little-endian
+        uint32 ndarrays instead of per-span tuples — the same values
+        with ~50x less Python-object allocation (the tuple path costs
+        ~3 objects per span, GIL-held; arrays are two memcpys + two
+        numpy wraps)."""
+        data = _as_bytes(data)
+        if as_arrays:
+            sb, eb = self._eng.encode_spans_raw(data)
+            return (np.frombuffer(sb, dtype=np.uint32),
+                    np.frombuffer(eb, dtype=np.uint32))
+        return self._spans(data)
 
     def encode_batch(self, docs: Sequence, threads: int = 0):
         """Parallel spans for independent docs (bookless, GIL released).

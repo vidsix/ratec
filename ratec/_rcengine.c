@@ -1546,6 +1546,274 @@ static PyObject *Engine_feedflush(EngineObj *self, PyObject *arg, int do_flush) 
 static PyObject *Engine_feed(EngineObj *self, PyObject *arg) {
     return Engine_feedflush(self, arg, 0);
 }
+/* v0.8.9: raw span output — two little-endian uint32 buffers (starts,
+ * ends) built with two memcpys instead of one tuple per span. The
+ * per-span tuple path allocates ~3 PyObjects GIL-HELD inside every
+ * stream-parallel worker, which serializes all workers on the GIL and
+ * costs ~0.3-0.5 s per 10.7 MiB even single-threaded. The raw buffers
+ * are GIL-free to the byte and rebase/concat in O(spans) numpy work on
+ * the Python side. ids are None in bookless mode, so arrays lose no
+ * information. */
+static PyObject *build_span_arrays(OutVec *s, OutVec *e) {
+    PyObject *bs = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(s->n * 4));
+    if (!bs) return NULL;
+    PyObject *be = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(s->n * 4));
+    if (!be) { Py_DECREF(bs); return NULL; }
+    if (s->n) {
+        memcpy(PyBytes_AS_STRING(bs), s->a, s->n * 4);
+        memcpy(PyBytes_AS_STRING(be), e->a, e->n * 4);
+    }
+    PyObject *out = PyTuple_Pack(2, bs, be);
+    Py_DECREF(bs); Py_DECREF(be);
+    return out;
+}
+static PyObject *Engine_feedflush_raw(EngineObj *self, PyObject *arg,
+                                      int do_flush) {
+    Py_buffer view;
+    if (!Eng_busy(self)) return NULL;
+    self->busy = 1;
+    if (PyObject_GetBuffer(arg, &view, PyBUF_SIMPLE) < 0) {
+        self->busy = 0; return NULL;
+    }
+    OutVec *s = &self->core->ros, *e2 = &self->core->roe,
+           *ids = &self->core->roi;
+    s->n = 0; e2->n = 0; ids->n = 0;
+    int rc;
+    Py_BEGIN_ALLOW_THREADS
+    rc = core_reserve(self->core, (size_t)view.len);
+    if (rc == 0)
+        rc = core_run(self->core, (const uint8_t *)view.buf, (size_t)view.len,
+                      1, NULL, s, e2, ids);
+    if (rc == 0 && do_flush)
+        rc = core_flush(self->core, s, e2, ids);
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&view);
+    self->busy = 0;
+    PyObject *out = NULL;
+    if (rc == 0) out = build_span_arrays(s, e2);
+    else if (rc == -1) PyErr_NoMemory();
+    else if (rc == -3)
+        PyErr_SetString(RatecError, "context map exhausted; raise "
+                        "map_capbits or encode in chunks");
+    else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+    if (rc == -1 || rc == -2) self->core->poisoned = 1;
+    return out;
+}
+static PyObject *Engine_encode_spans_raw(EngineObj *self, PyObject *arg) {
+    return Engine_feedflush_raw(self, arg, 1);
+}
+static PyObject *Engine_feed_raw(EngineObj *self, PyObject *arg) {
+    return Engine_feedflush_raw(self, arg, 0);
+}
+static PyObject *Engine_flush_raw(EngineObj *self, PyObject *Py_UNUSED(ig)) {
+    if (!Eng_busy(self)) return NULL;
+    self->busy = 1;
+    OutVec *s = &self->core->ros, *e2 = &self->core->roe,
+           *ids = &self->core->roi;
+    s->n = 0; e2->n = 0; ids->n = 0;
+    int rc;
+    Py_BEGIN_ALLOW_THREADS
+    rc = core_flush(self->core, s, e2, ids);
+    Py_END_ALLOW_THREADS
+    self->busy = 0;
+    PyObject *out = NULL;
+    if (rc == 0) out = build_span_arrays(s, e2);
+    else if (rc == -1) PyErr_NoMemory();
+    else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+    if (rc < 0) self->core->poisoned = 1;
+    return out;
+}
+
+/* v0.8.9: thread-parallel decode_batch. Decoding is a PURE READ of the
+ * book (ids -> ln/off -> arena gather, no judge, no state mutation), so
+ * all worker threads share ONE read-only core — no clones, no state
+ * sync, no book copy. Three phases: (1) GIL-released parallel bounds
+ * check + output-size pass (random ln[] reads), (2) GIL-held output
+ * allocation, (3) GIL-released parallel pipelined gather — the same
+ * kernel as decode_bytes, replicated per job. */
+typedef struct {
+    const uint32_t *ids; size_t n;
+    uint8_t *out;
+    uint64_t total;
+} DJob;
+typedef struct {
+    DJob *jobs; int njobs; atomic_int next;
+    const RcCore *core; atomic_int err_job;
+} DPool;
+
+static void *dworker_check(void *argp) {
+    DPool *p = (DPool *)argp;
+    const uint32_t bn = p->core->book.n;
+    const uint32_t *ln = p->core->book.ln;
+    for (;;) {
+        const int idx = atomic_fetch_add(&p->next, 1);
+        if (idx >= p->njobs) return NULL;
+        DJob *j = &p->jobs[idx];
+        uint64_t tot = 0;
+        int bad = 0;
+        for (size_t i = 0; i < j->n; i++) {
+            const uint32_t v = j->ids[i];
+            if (v >= bn) { bad = 1; break; }
+            tot += ln[v];
+        }
+        if (bad) {
+            atomic_store(&p->err_job, idx);
+            j->total = (uint64_t)-1;
+        } else {
+            j->total = tot;
+        }
+    }
+}
+static void *dworker_copy(void *argp) {
+    DPool *p = (DPool *)argp;
+    const uint8_t *arena = p->core->book.arena;
+    const uint32_t *off = p->core->book.off;
+    const uint32_t *ln = p->core->book.ln;
+    for (;;) {
+        const int idx = atomic_fetch_add(&p->next, 1);
+        if (idx >= p->njobs) return NULL;
+        DJob *j = &p->jobs[idx];
+        uint8_t *wp = j->out;
+        if (j->n) {
+            const uint8_t *cur = arena + off[j->ids[0]];
+            const uint8_t *nxt = cur;
+            uint32_t lc = ln[j->ids[0]];
+            uint32_t ln_ = lc;
+            __builtin_prefetch(cur, 0, 1);
+            for (size_t i = 0; i < j->n; i++) {
+                if (i + 1 < j->n) {
+                    const uint32_t v1 = j->ids[i + 1];
+                    nxt = arena + off[v1];
+                    ln_ = ln[v1];
+                    __builtin_prefetch(nxt, 0, 1);
+                }
+                memcpy(wp, cur, lc);
+                wp += lc;
+                cur = nxt; lc = ln_;
+            }
+        }
+    }
+}
+static void dpool_run(void *(*fn)(void *), DPool *p, int nthreads) {
+    if (nthreads <= 1) { fn(p); return; }
+    pthread_t th[63];
+    for (int t = 1; t < nthreads; t++)
+        pthread_create(&th[t - 1], NULL, fn, p);
+    fn(p);
+    for (int t = 1; t < nthreads; t++)
+        pthread_join(th[t - 1], NULL);
+}
+static PyObject *decode_batch_impl(EngineObj *self, PyObject *args,
+                                   PyObject *kwds) {
+    PyObject *ids_seq;
+    int threads = 0;
+    static char *kwlist[] = {"ids", "threads", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|$i", kwlist,
+                                     &ids_seq, &threads))
+        return NULL;
+    PyObject *fast = PySequence_Fast(ids_seq, "ids must be a sequence");
+    if (!fast) return NULL;
+    Py_ssize_t nd = PySequence_Fast_GET_SIZE(fast);
+    if (nd == 0) { Py_DECREF(fast); return PyList_New(0); }
+    Py_buffer *views = (Py_buffer *)calloc((size_t)nd, sizeof(Py_buffer));
+    DJob *jobs = (DJob *)calloc((size_t)nd, sizeof(DJob));
+    if (!views || !jobs) {
+        free(views); free(jobs); Py_DECREF(fast); return PyErr_NoMemory();
+    }
+    for (Py_ssize_t k = 0; k < nd; k++) {
+        if (PyObject_GetBuffer(PySequence_Fast_GET_ITEM(fast, k),
+                               &views[k], PyBUF_SIMPLE) < 0) {
+            for (Py_ssize_t q = 0; q < k; q++) PyBuffer_Release(&views[q]);
+            free(views); free(jobs); Py_DECREF(fast); return NULL;
+        }
+        if (views[k].len % 4 != 0) {
+            for (Py_ssize_t q = 0; q <= k; q++) PyBuffer_Release(&views[q]);
+            free(views); free(jobs); Py_DECREF(fast);
+            PyErr_SetString(PyExc_ValueError,
+                            "buffer length must be a multiple of 4 "
+                            "(uint32 ids)");
+            return NULL;
+        }
+        jobs[k].ids = (const uint32_t *)views[k].buf;
+        jobs[k].n = (size_t)views[k].len / 4;
+        jobs[k].out = NULL;
+        jobs[k].total = 0;
+    }
+    int nthreads = threads;
+    if (nthreads <= 0) {
+        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        nthreads = (int)(ncpu > 0 ? ncpu : 1);
+    }
+    if (nthreads > nd) nthreads = (int)nd;
+    if (nthreads > 64) nthreads = 64;
+    DPool p;
+    p.jobs = jobs; p.njobs = (int)nd; p.core = self->core;
+    /* phase 1: parallel bounds check + totals */
+    atomic_init(&p.next, 0); atomic_init(&p.err_job, -1);
+    Py_BEGIN_ALLOW_THREADS
+    dpool_run(dworker_check, &p, nthreads);
+    Py_END_ALLOW_THREADS
+    int bad_job = atomic_load(&p.err_job);
+    if (bad_job >= 0) {
+        /* deterministic error report: rescan the failing job */
+        const uint32_t bn = self->core->book.n;
+        const DJob *j = &jobs[bad_job];
+        uint32_t bad_id = 0;
+        size_t at = 0;
+        for (size_t i = 0; i < j->n; i++)
+            if (j->ids[i] >= bn) { bad_id = j->ids[i]; at = i; break; }
+        PyErr_Format(RatecError,
+                     "unknown patch id %u in sequence %d at index %zu "
+                     "(book has %u entries)", bad_id, bad_job, at, bn);
+        for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
+        free(views); free(jobs); Py_DECREF(fast);
+        return NULL;
+    }
+    /* phase 2: allocate outputs (GIL held) */
+    PyObject *out = PyList_New(nd);
+    if (!out) {
+        for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
+        free(views); free(jobs); Py_DECREF(fast);
+        return NULL;
+    }
+    for (Py_ssize_t k = 0; k < nd; k++) {
+        PyObject *b = PyBytes_FromStringAndSize(NULL,
+                                                (Py_ssize_t)jobs[k].total);
+        if (!b) {
+            Py_DECREF(out);
+            out = NULL;
+            break;
+        }
+        jobs[k].out = (uint8_t *)PyBytes_AS_STRING(b);
+        PyList_SET_ITEM(out, k, b);   /* steals ref */
+    }
+    if (out) {
+        /* phase 3: parallel gather */
+        atomic_init(&p.next, 0);
+        Py_BEGIN_ALLOW_THREADS
+        dpool_run(dworker_copy, &p, nthreads);
+        Py_END_ALLOW_THREADS
+    }
+    if (!out) PyErr_NoMemory();
+    for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
+    free(views); free(jobs); Py_DECREF(fast);
+    return out;
+}
+static PyObject *Engine_decode_batch(EngineObj *self, PyObject *args,
+                                     PyObject *kwds) {
+    /* the book must not be interning while workers read it: hold the
+     * engine's re-entrance flag for the whole batch */
+    if (!Eng_busy(self)) return NULL;
+    if (!self->core->store_book) {
+        PyErr_SetString(RatecError,
+                        "decode_batch requires store_book=True");
+        return NULL;
+    }
+    self->busy = 1;
+    PyObject *res = decode_batch_impl(self, args, kwds);
+    self->busy = 0;
+    return res;
+}
 static PyObject *Engine_flush(EngineObj *self, PyObject *Py_UNUSED(ignored)) {
     if (!Eng_busy(self)) return NULL;
     self->busy = 1;
@@ -1924,6 +2192,17 @@ static PyMethodDef Engine_methods[] = {
      "encode_spans(data) -> [(start, end, id|None), ...] (feed + flush)"},
     {"decode_bytes", (PyCFunction)Engine_decode_bytes, METH_O,
      "decode_bytes(ids) -> bytes (requires the same book)"},
+    {"encode_spans_raw", (PyCFunction)Engine_encode_spans_raw, METH_O,
+     "encode_spans_raw(seg) -> (starts, ends) as two uint32 LE bytes "
+     "(feed + flush; GIL-free tuple-free span output)"},
+    {"feed_raw", (PyCFunction)Engine_feed_raw, METH_O,
+     "feed_raw(seg) -> (starts, ends) uint32 LE bytes, no flush"},
+    {"flush_raw", (PyCFunction)Engine_flush_raw, METH_NOARGS,
+     "flush_raw() -> (starts, ends) uint32 LE bytes"},
+    {"decode_batch", (PyCFunction)(void (*)(void))Engine_decode_batch,
+     METH_VARARGS | METH_KEYWORDS,
+     "decode_batch(ids_list, threads=0) -> list[bytes] — thread-parallel "
+     "book read (uint32 LE buffers; ids must come from this book)"},
     {"reset",        (PyCFunction)Engine_reset,        METH_NOARGS,
      "reset() -> cold engine (fresh tables)."},
     {"save_state",   (PyCFunction)Engine_save_state,   METH_NOARGS,

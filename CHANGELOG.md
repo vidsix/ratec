@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.8.9 — the GIL-free + parallel-decode release (internal)
+
+Two structural multithreaded costs were named, measured, and removed:
+the per-span Python-object build that held the GIL inside every stream
+worker, and the single-threaded decode path (decode is a pure book read
+nobody had parallelized). Plus the project's first machine-checked
+execution-model theorems in LEAN.
+
+### Kept
+
+- **Tuple-free span output (C)**: `encode_spans_raw` / `feed_raw` /
+  `flush_raw` return two little-endian uint32 buffers (memcpy from the
+  emit vectors — zero per-span Python objects); Python
+  `as_arrays=True` on `encode_to_spans` and `encode_stream_parallel`
+  wraps + rebases in numpy. The tuple path costs ~3 PyObjects per span
+  built GIL-HELD inside every stream worker (~2.6M objects per
+  10.7 MiB). Gates: arrays == tuples bit-exact on the sequential lane
+  and both stream modes (sampled position-wise, 0.8-1.2M spans).
+  ABBA: sequential spans lane 12.42 -> **14.48 MB/s (+17% time)** —
+  the new fastest spans path; runs lane +1% on this 2-vCPU box (the
+  tuple build hides behind the other worker's C work at nworkers=2;
+  the structural gain is per-worker GIL-freedom, which removes the
+  scaling wall on many-core boxes where worker count > 2).
+- **Thread-parallel decode_batch (C)**: decoding is a PURE READ of the
+  book (ids -> ln/off -> arena; no judge, no state change), so one
+  read-only core is SHARED across the C thread pool — no clones, no
+  state sync. Three phases: parallel bounds+size pass, GIL-held
+  output allocation, parallel pipelined gather (the decode_bytes
+  kernel, replicated per job). `RateC.decode_batch(ids_list,
+  threads)` with sequential fallback for unvalidated int lists.
+  Gates: output == decode_bytes loop (24 docs), deterministic error
+  reporting (first bad id, index and sequence reported), book
+  required. ABBA: 600K ids / 300 docs — py-loop 120.2 Mids/s ->
+  C pool **176.9 Mids/s at thr=2 (1.5x)**; box caps at ~1.5x per the
+  SMT 2-vCPU budget.
+- **LEAN theorems (download/ratec-lean/RatecSerial.lean, compiles
+  clean, no sorry)**: S1 the fold decomposition lemma (streams
+  `xs ++ ys` fold exactly as `ys` from the post-`xs` state — the
+  mathematical foundation of batch/runs parallelism), S2 the adaptive
+  step does not commute (no multiset map-reduce can reproduce the
+  serial chain), S3 surprisal is history-dependent (concrete 256/1 vs
+  256/2), S4 the judge+patcher pipeline is itself a fold inheriting
+  S1+S2. Together: *the cheapest exact algorithm is a serial fold per
+  stream, and parallelism must (and may exactly) decompose by
+  contiguous runs* — the prior RateC.lean (Kraft/cut-band/codes)
+  still compiles alongside.
+- Suite 30/30 (24 existing + 6 new: arrays equality, parallel decode
+  equality + error paths + fallback).
+
+### Measured and rejected (ledger continues)
+
+- The runs lane gains only +1% from tuple removal at nworkers=2 on
+  this box — NOT a rejection: the cost model is per-worker GIL-held
+  time (linear in spans) vs C work (parallel); the wall appears when
+  workers > GIL-throughput allows (~2-3 here, ~6-8 on real boxes).
+  The ABBA harness on THIS box cannot demonstrate a many-core win;
+  recorded as structural.
+- decode's bounds-check pass (random ln[] reads) is O(total ids) and
+  stays inside the C pool's parallel phase 1 — no measurable serial
+  residue at 600K ids.
+
+### Findings for the record
+
+- The abstracted step function is provably non-commutative on
+  concrete bytes (LEAN S2), which closes the "could a cheaper
+  reordering/multiset algorithm exist?" question for the exact lane:
+  any exact algorithm must apply the state chain in stream order.
+  Cheaper single-stream algorithms must therefore come from constant
+  factors (SIMD/FP restructuring), not reorganization — consistent
+  with the v0.8.7 neutered-orders decomposition and the deferred
+  FST-lane AVX2 note.
+- encode_to_spans is a stream CONTINUATION (fresh semantics only via
+  reset()) — benchmark gates must reset() between calls or they
+  measure a warm judge with fewer, longer patches (833K vs 1046K
+  spans in a scouting pass that initially looked like an equality
+  failure).
+
 ## v0.8.8 — the multicore-throughput release (internal)
 
 The stream-parallel mode was advertised as "the throughput mode" while
