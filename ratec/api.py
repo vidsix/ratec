@@ -170,7 +170,8 @@ class RateC:
     def encode_stream_parallel(self, data, chunk: int | None = 1 << 20,
                                threads: int = 0, head_chunks: int = 1,
                                mode: str = "runs", as_arrays: bool = False,
-                               ids: bool = False):
+                               ids: bool = False,
+                               intern_threads: int | None = None):
         """Encode ONE long stream on many cores by chunking.
 
         The first `head_chunks` chunks run sequentially (exact judge
@@ -218,6 +219,13 @@ class RateC:
         (the ids decode via decode_bytes/decode_batch on this instance;
         the book persists across calls, so repeated calls share one
         vocabulary). ids=True implies the array form.
+
+        intern_threads (v0.9.0): worker count for the intern pass
+        (default = threads). The pass splits the span array into
+        contiguous chunks, interns each into a private table (zero
+        copies), merges in chunk order into the real book, and remaps —
+        the ids are bit-exactly the sequential pass's for ANY thread
+        count, so threads only change speed, never output.
         """
         if mode not in ("runs", "snapshot"):
             raise ValueError("mode must be 'runs' or 'snapshot'")
@@ -233,10 +241,13 @@ class RateC:
         if chunk is None:
             chunk = max(1 << 20, min(8 << 20, n // max(1, threads)))
         want_arrays = as_arrays or ids
+        if intern_threads is None:
+            intern_threads = threads
         if n <= chunk:
             starts, ends = self.encode_to_spans(data, as_arrays=True)
             return self._stream_ids_tail(data, starts, ends,
-                                         ids=ids, as_arrays=as_arrays)
+                                         ids=ids, as_arrays=as_arrays,
+                                         intern_threads=intern_threads)
         from concurrent.futures import ThreadPoolExecutor
 
         head = min(max(0, head_chunks), (n + chunk - 1) // chunk - 1)
@@ -312,7 +323,8 @@ class RateC:
                 sf = np.concatenate(sa) if len(sa) > 1 else sa[0].copy()
                 ef = np.concatenate(ea) if len(ea) > 1 else ea[0].copy()
                 return self._stream_ids_tail(data, sf, ef,
-                                             ids=ids, as_arrays=as_arrays)
+                                             ids=ids, as_arrays=as_arrays,
+                                             intern_threads=intern_threads)
             for part in spans_parts:
                 if part:
                     starts_all.extend(part)
@@ -349,17 +361,25 @@ class RateC:
             sf = np.concatenate(sa) if len(sa) > 1 else sa[0].copy()
             ef = np.concatenate(ea) if len(ea) > 1 else ea[0].copy()
             return self._stream_ids_tail(data, sf, ef,
-                                         ids=ids, as_arrays=as_arrays)
+                                         ids=ids, as_arrays=as_arrays,
+                                         intern_threads=intern_threads)
         for spans_part in parts:
             starts_all.extend(spans_part)
         return out + starts_all
 
-    def _stream_ids_tail(self, data, starts, ends, *, ids, as_arrays):
+    def _stream_ids_tail(self, data, starts, ends, *, ids, as_arrays,
+                         intern_threads=1):
         """Shared tail of encode_stream_parallel: attach the intern-pass
         token stream (ids=True) or convert back to tuples."""
         if ids:
-            raw = self._eng.intern_spans(data,
-                                         starts.tobytes(), ends.tobytes())
+            if intern_threads > 1:
+                raw = self._eng.intern_spans_parallel(
+                    data, starts.tobytes(), ends.tobytes(),
+                    int(intern_threads))
+            else:
+                raw = self._eng.intern_spans(data,
+                                             starts.tobytes(),
+                                             ends.tobytes())
             return (starts, ends, np.frombuffer(raw, dtype=np.uint32))
         if not as_arrays:
             return [(s, e, None) for s, e in zip(starts.tolist(),

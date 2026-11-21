@@ -242,6 +242,21 @@ static void book_init(Book *b) {
     b->slot = sl; b->capbits = ncap; b->mask = nmask;
     return 0;
 }
+/* probe-only lookup: returns the id if the content is present,
+ * ID_NONE-without-error otherwise (never writes; used by the parallel
+ * intern's read-only pre-probe against the frozen book) */
+static uint32_t book_lookup(const Book *b, const uint8_t *p, size_t len,
+                            uint64_t h) {
+    uint64_t i = h & b->mask;
+    while (b->slot[i].ref) {
+        const uint32_t id = b->slot[i].ref - 1;
+        if (b->ln[id] == len && memcmp(b->arena + b->off[id], p, len) == 0)
+            return id;
+        i = (i + 1) & b->mask;
+    }
+    return ID_NONE;
+}
+
 /* returns id, or ID_NONE on allocation failure (b->err set) */
 static uint32_t book_intern_h(Book *b, const uint8_t *p, size_t len,
                               uint64_t h) {
@@ -1694,7 +1709,7 @@ static void *dworker_copy(void *argp) {
         }
     }
 }
-static void dpool_run(void *(*fn)(void *), DPool *p, int nthreads) {
+static void dpool_run(void *(*fn)(void *), void *p, int nthreads) {
     if (nthreads <= 1) { fn(p); return; }
     pthread_t th[63];
     for (int t = 1; t < nthreads; t++)
@@ -1889,6 +1904,299 @@ static PyObject *Engine_intern_spans(EngineObj *self, PyObject *args) {
         PyErr_SetString(RatecError, "book interning failed (allocation)");
     }
 done:
+    PyBuffer_Release(&vd);
+    PyBuffer_Release(&vs);
+    PyBuffer_Release(&ve);
+    self->busy = 0;
+    return out;
+}
+
+/* -------- v0.9.0: thread-parallel intern pass (ids=True, many-core) ----
+ * The ids must reproduce the SEQUENTIAL first-seen order, so the pass
+ * splits the SPAN ARRAY (not the stream) into K contiguous chunks and
+ * runs three phases:
+ *   P1 (parallel, GIL released): each worker interns its chunk into a
+ *      PRIVATE open-addressing table — slots hold the patch fnv and
+ *      local id; content is the (offset, len) pair INTO THE INPUT
+ *      BUFFER (the slot's first-span index back-maps to it), zero
+ *      bytes copied. Produces per-span local ids, the first-span map,
+ *      and the per-distinct fnv — the distinct list in local-id order
+ *      IS the local first-seen order — and then PRE-PROBES the list
+ *      against the frozen book (read-only book_lookup): hits resolve
+ *      their global id on the spot, misses join the chunk's miss list.
+ *   P2 (sequential, GIL released): walk workers in chunk order;
+ *      book_intern_h each MISS only (book state advances with the
+ *      inserts — a frozen-book miss may hit here after an earlier
+ *      chunk inserted it; either way the id is exactly the sequential
+ *      pass's). Chunks-in-order x local-first-seen IS the global
+ *      first-seen order, so the ids match the sequential pass
+ *      bit-exactly for ANY chunk count; warm books make P2 nearly
+ *      empty, cold books pay the full distinct insert here.
+ *   P3 (parallel, GIL released): ids[k] = remap_w[local_id(k)].
+ * Table sizing: 2 x span count (max load 0.5 even when every span is
+ * distinct — no rehash, no growth mid-phase). threads <= 1 keeps the
+ * plain sequential loop (no scratch tables). */
+typedef struct {
+    const uint8_t *data;
+    const uint32_t *st, *en;
+    const Book *bk_ro;          /* frozen book for the read-only pre-probe */
+    size_t base, cnt;
+    uint64_t *hslot;            /* patch fnv per slot */
+    uint32_t *islot;            /* local id per slot; 0xFFFFFFFF = empty */
+    size_t mask;
+    uint32_t *local;            /* per-span local id */
+    uint32_t *fst;              /* first span index per local id */
+    uint64_t *dfnv;             /* distinct patch fnv, local-id order */
+    uint32_t ndistinct;
+    uint32_t *remap;            /* local id -> global id (after P2) */
+    uint32_t *out;              /* final ids, absolute span index (P3) */
+    uint32_t *miss_lids;        /* distinct ids NOT in the frozen book */
+    uint32_t nmiss;             /* the merge walks only these */
+    int failed;                 /* P2 only (sequential phase) */
+} IJob;
+
+typedef struct { IJob *jobs; int njobs; atomic_int next; } IPool;
+
+static void iintern_job(IJob *j) {
+    const uint8_t *data = j->data;
+    const uint32_t *st = j->st, *en = j->en;
+    const size_t mask = j->mask, base = j->base;
+    uint64_t *hslot = j->hslot;
+    uint32_t *islot = j->islot;
+    uint32_t *fst = j->fst;
+    uint64_t *dfnv = j->dfnv;
+    uint32_t nd = 0;
+    for (size_t k = 0; k < j->cnt; k++) {
+        const uint32_t s = st[base + k];
+        const size_t cl = (size_t)(en[base + k] - s);
+        const uint8_t *p = data + s;
+        uint64_t h = 0xcbf29ce484222325ull;   /* same fnv-1a step as the
+                                                 inline emit path */
+        for (size_t q = 0; q < cl; q++)
+            h = (h ^ p[q]) * 0x100000001b3ull;
+        size_t i = (size_t)h & mask;
+        for (;;) {
+            const uint32_t v = islot[i];
+            if (v == 0xFFFFFFFFu) break;      /* empty slot: insert */
+            const uint32_t fk = fst[v];
+            if (en[base + (size_t)fk] - st[base + (size_t)fk] == cl &&
+                memcmp(data + st[base + (size_t)fk], p, cl) == 0) {
+                j->local[k] = v;              /* content hit */
+                goto next_span;
+            }
+            i = (i + 1) & mask;
+        }
+        hslot[i] = h;
+        islot[i] = nd;
+        fst[nd] = (uint32_t)k;
+        dfnv[nd] = h;
+        j->local[k] = nd;
+        nd++;
+    next_span:;
+    }
+    j->ndistinct = nd;
+    /* read-only pre-probe against the FROZEN book (the merge has not
+     * started — nobody writes it during P1): hits resolve their global
+     * id right here; misses join the ordered merge list. A hit at
+     * frozen state predates the whole merge, so its id is exactly what
+     * the sequential pass would use. */
+    uint32_t nm = 0;
+    for (uint32_t lid = 0; lid < j->ndistinct; lid++) {
+        const uint32_t fk = j->fst[lid];
+        const uint8_t *p = data + st[base + (size_t)fk];
+        const size_t cl = (size_t)(en[base + (size_t)fk] - st[base + (size_t)fk]);
+        const uint32_t id = book_lookup(j->bk_ro, p, cl, j->dfnv[lid]);
+        if (id == ID_NONE) j->miss_lids[nm++] = lid;
+        else j->remap[lid] = id;
+    }
+    j->nmiss = nm;
+}
+
+static void *iworker_intern(void *argp) {
+    IPool *pool = (IPool *)argp;
+    for (;;) {
+    const int idx = atomic_fetch_add(&pool->next, 1);
+    if (idx >= pool->njobs) return NULL;
+    iintern_job(&pool->jobs[idx]);
+    }
+    return NULL;
+}
+
+/* P2: ordered merge into the real book (single thread; the book may
+ * grow, contents interning — ids come out in global first-seen order) */
+static int imerge(IJob *jobs, int njobs, Book *bk) {
+    for (int w = 0; w < njobs; w++) {
+        IJob *j = &jobs[w];
+        for (uint32_t mi = 0; mi < j->nmiss && !j->failed; mi++) {
+            const uint32_t lid = j->miss_lids[mi];
+            const uint32_t fk = j->fst[lid];
+            const uint8_t *p = j->data + j->st[j->base + (size_t)fk];
+            const size_t cl =
+                (size_t)(j->en[j->base + (size_t)fk] - j->st[j->base + (size_t)fk]);
+            const uint32_t id = book_intern_h(bk, p, cl, j->dfnv[lid]);
+            if (id == ID_NONE) return -1;     /* book allocation failure */
+            j->remap[lid] = id;
+        }
+    }
+    return 0;
+}
+
+static void *iworker_gather(void *argp) {
+    IPool *pool = (IPool *)argp;
+    for (;;) {
+    const int idx = atomic_fetch_add(&pool->next, 1);
+    if (idx >= pool->njobs) return NULL;
+    IJob *j = &pool->jobs[idx];
+    const uint32_t *remap = j->remap;
+    const uint32_t *local = j->local;
+    uint32_t *out = j->out + j->base;
+    for (size_t k = 0; k < j->cnt; k++)
+        out[k] = remap[local[k]];
+    }
+    return NULL;
+}
+
+static PyObject *Engine_intern_spans_parallel(EngineObj *self,
+                                              PyObject *args) {
+    if (!Eng_busy(self)) return NULL;
+    if (!self->core->store_book) {
+        PyErr_SetString(RatecError,
+                        "intern_spans_parallel requires store_book=True");
+        return NULL;
+    }
+    Py_buffer vd, vs, ve;
+    int threads = 2;
+    if (!PyArg_ParseTuple(args, "y*y*y*|i", &vd, &vs, &ve, &threads))
+        return NULL;
+    self->busy = 1;
+    PyObject *out = NULL;
+    IJob *jobs = NULL;
+    int njobs = 0;
+    if (vs.len != ve.len || vs.len % 4 != 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "starts/ends must be equal-length uint32 buffers");
+        goto done;
+    }
+    const size_t m = (size_t)vs.len / 4;
+    const uint8_t *data = (const uint8_t *)vd.buf;
+    const size_t dlen = (size_t)vd.len;
+    const uint32_t *st = (const uint32_t *)vs.buf;
+    const uint32_t *en = (const uint32_t *)ve.buf;
+    /* tiling validation: spans must partition [0, dlen) — identical to
+     * the sequential pass (the ids are only as good as their tiling) */
+    if (m > 0 && (st[0] != 0 || en[m - 1] != dlen)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "spans must tile the stream exactly "
+                        "(start 0, end == len)");
+        goto done;
+    }
+    for (size_t k = 0; k < m; k++) {
+        if (en[k] <= st[k] || en[k] > dlen ||
+            (k + 1 < m && en[k] != st[k + 1])) {
+            PyErr_Format(PyExc_ValueError,
+                         "span %zu does not tile the stream "
+                         "(start %u, end %u)", k, st[k], en[k]);
+            goto done;
+        }
+    }
+    if (threads <= 1 || m < 2) {
+        /* degenerate: the sequential loop, no scratch tables */
+        out = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(m * 4));
+        if (!out) goto done;
+        uint32_t *ids = (uint32_t *)PyBytes_AS_STRING(out);
+        Book *bk = &self->core->book;
+        int failed = 0;
+        Py_BEGIN_ALLOW_THREADS
+        for (size_t k = 0; k < m; k++) {
+            const uint8_t *p = data + st[k];
+            const size_t cl = (size_t)(en[k] - st[k]);
+            uint64_t h = 0xcbf29ce484222325ull;
+            for (size_t q = 0; q < cl; q++)
+                h = (h ^ p[q]) * 0x100000001b3ull;
+            const uint32_t id = book_intern_h(bk, p, cl, h);
+            if (id == ID_NONE) { failed = 1; break; }
+            ids[k] = id;
+        }
+        Py_END_ALLOW_THREADS
+        if (failed) {
+            Py_CLEAR(out);
+            PyErr_SetString(RatecError,
+                            "book interning failed (allocation)");
+        }
+        goto done;
+    }
+    /* K workers over contiguous span chunks */
+    njobs = threads > 64 ? 64 : threads;
+    while ((size_t)njobs > m) njobs >>= 1;
+    jobs = (IJob *)calloc((size_t)njobs, sizeof(IJob));
+    if (!jobs) { PyErr_NoMemory(); goto done; }
+    out = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(m * 4));
+    if (!out) goto done;
+    uint32_t *outids = (uint32_t *)PyBytes_AS_STRING(out);
+    int alloc_failed = 0;
+    for (int w = 0; w < njobs; w++) {
+        IJob *j = &jobs[w];
+        j->data = data; j->st = st; j->en = en;
+        j->base = (size_t)((uint64_t)m * (uint64_t)w / (uint64_t)njobs);
+        j->cnt = (size_t)((uint64_t)m * (uint64_t)(w + 1) / (uint64_t)njobs)
+                 - j->base;
+        size_t ts = 64;
+        while (ts < j->cnt * 2) ts <<= 1;   /* max load 0.5, no rehash */
+        j->mask = ts - 1;
+        j->out = outids;
+        j->hslot = (uint64_t *)malloc(ts * sizeof(uint64_t));
+        j->islot = (uint32_t *)malloc(ts * sizeof(uint32_t));
+        j->local = (uint32_t *)malloc((j->cnt ? j->cnt : 1) * sizeof(uint32_t));
+        j->fst = (uint32_t *)malloc((j->cnt ? j->cnt : 1) * sizeof(uint32_t));
+        j->dfnv = (uint64_t *)malloc((j->cnt ? j->cnt : 1) * sizeof(uint64_t));
+        j->remap = (uint32_t *)malloc((j->cnt ? j->cnt : 1) * sizeof(uint32_t));
+        j->miss_lids = (uint32_t *)malloc((j->cnt ? j->cnt : 1) * sizeof(uint32_t));
+        j->bk_ro = &self->core->book;
+        if (!j->hslot || !j->islot || !j->local || !j->fst ||
+            !j->dfnv || !j->remap || !j->miss_lids) { alloc_failed = 1; break; }
+        memset(j->islot, 0xFF, ts * sizeof(uint32_t));
+    }
+    if (alloc_failed) {
+        PyErr_NoMemory();
+        goto done;
+    }
+    IPool p1; p1.jobs = jobs; p1.njobs = njobs;
+    IPool p3; p3.jobs = jobs; p3.njobs = njobs;
+    atomic_init(&p1.next, 0);
+    atomic_init(&p3.next, 0);
+    Py_BEGIN_ALLOW_THREADS
+    /* P1 workers + P2 merged INTO the same window: the main thread is
+     * the merger and consumes each chunk the moment its worker marks
+     * it done — the ordered (serial) book interning overlaps the
+     * parallel fnv/probe work instead of running after it. Chunk order
+     * is preserved, so the ids stay bit-exactly the sequential ones. */
+    /* BARRIERED phases: P1 (intern + read-only pre-probe) runs to
+     * completion while the book is FROZEN — the merge must not overlap
+     * it, because book_intern_h inserts (and grows the hash table)
+     * concurrently with the pre-probes otherwise. P2 then walks the
+     * miss lists in chunk order (the only serial phase; warm books
+     * make it nearly empty), P3 gathers. Chunk order in P2 keeps the
+     * ids bit-exactly the sequential pass's. */
+    dpool_run(iworker_intern, &p1, njobs);             /* P1 + pre-probe */
+    if (imerge(jobs, njobs, &self->core->book) < 0)    /* P2: misses only */
+        jobs[0].failed = 1;
+    else
+        dpool_run(iworker_gather, &p3, njobs);         /* P3 */
+    Py_END_ALLOW_THREADS
+    if (jobs[0].failed) {
+        Py_CLEAR(out);
+        PyErr_SetString(RatecError, "book interning failed (allocation)");
+    }
+done:
+    if (jobs) {
+        for (int w = 0; w < njobs; w++) {
+            free(jobs[w].hslot); free(jobs[w].islot);
+            free(jobs[w].local); free(jobs[w].fst);
+            free(jobs[w].dfnv); free(jobs[w].remap);
+            free(jobs[w].miss_lids);
+        }
+        free(jobs);
+    }
     PyBuffer_Release(&vd);
     PyBuffer_Release(&vs);
     PyBuffer_Release(&ve);
@@ -2288,6 +2596,11 @@ static PyMethodDef Engine_methods[] = {
      "intern_spans(data, starts, ends) -> raw uint32 LE ids — interns the "
      "span tiling into this engine's book in encounter order (ids side of "
      "stream-parallel encoding; judge not consulted)"},
+    {"intern_spans_parallel", (PyCFunction)Engine_intern_spans_parallel,
+     METH_VARARGS,
+     "intern_spans_parallel(data, starts, ends, threads=2) -> raw uint32 "
+     "LE ids — thread-parallel intern (private tables, ordered merge); "
+     "ids are bit-exactly the sequential pass's for ANY thread count"},
     {"reset",        (PyCFunction)Engine_reset,        METH_NOARGS,
      "reset() -> cold engine (fresh tables)."},
     {"save_state",   (PyCFunction)Engine_save_state,   METH_NOARGS,
