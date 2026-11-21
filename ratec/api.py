@@ -764,3 +764,78 @@ def batch_encode(docs: Sequence, c: float = 20, threads: int = 0,
 
 
 __version__ = _rc.version()
+
+
+# ------------------------------------------------------------------ bench
+def bench(n: int = 4 << 20, c: int = 20, threads: int = 2, rounds: int = 3):
+    """Throughput of the main entry points, measured on this machine NOW.
+
+    Self-contained deterministic mixed-content stream (no fixture files),
+    best-of-`rounds` per entry. Prints a table and returns the dict so
+    scripts/CI can diff. Absolute numbers are host-dependent; the
+    RELATIVE ordering is what the design promises (see BENCHMARKS.md):
+
+        encode_stream_parallel(spans) > encode_to_spans > encode_bytes
+        stream ids adds the sequential intern pass (+~10-15% time)
+        decode_bytes ~ 150+ Mids/s single-thread, decode_batch scales
+
+    Entries (all exact lane unless noted):
+      encode_bytes      sequential judge+patcher, ids + book (store_book)
+      encode_to_spans   sequential spans, tuple-free as_arrays output
+      stream_parallel   encode_stream_parallel, runs mode, spans
+      stream_ids        the same with ids=True (spans + intern pass)
+      decode_bytes      full book read of the stream's ids
+      batch             ratec.batch_encode, thread-parallel, spans
+    """
+    import time
+    line = (b"def encode_stream(data: bytes) -> list:  # the quick brown "
+            b"fox jumps over the lazy dog\n    out = []\n    for i, b in "
+            b"enumerate(data):\n        if b % 7:\n            out.append("
+            b"(i * 31 + b) & 0xFFFF)\n# utf8: \xe4\xbd\xa0\xe5\xa5\xbd"
+            b" \xd0\xbf\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n")
+    data = (line * (n // len(line) + 1))[:n]
+
+    def best(f):
+        ts = []
+        for _ in range(rounds):
+            t0 = time.perf_counter()
+            f()
+            ts.append(time.perf_counter() - t0)
+        return min(ts)
+
+    r = RateC(c=c, store_book=True)
+    t_enc = best(lambda: r.encode_bytes(data))
+    r.reset()
+    t_spans = best(lambda: r.encode_to_spans(data, as_arrays=True))
+
+    rp = RateC(c=c, store_book=True)
+    t_par = best(lambda: rp.encode_stream_parallel(
+        data, threads=threads, as_arrays=True))
+    t_ids = best(lambda: rp.encode_stream_parallel(
+        data, threads=threads, ids=True))
+    starts, ends, tok = rp.encode_stream_parallel(
+        data, threads=threads, ids=True)
+    t_dec = best(lambda: rp.decode_bytes(tok))
+
+    t_batch = best(lambda: batch_encode(
+        [data[i:i + (1 << 20)] for i in range(0, len(data), 1 << 20)],
+        c=c, threads=threads))
+
+    res = {
+        "n_bytes": n, "c": c, "threads": threads, "rounds": rounds,
+        "encode_bytes_mb_s": n / t_enc / 1e6,
+        "encode_to_spans_mb_s": n / t_spans / 1e6,
+        "stream_parallel_mb_s": n / t_par / 1e6,
+        "stream_ids_mb_s": n / t_ids / 1e6,
+        "decode_bytes_mb_s": n / t_dec / 1e6,
+        "batch_mb_s": n / t_batch / 1e6,
+    }
+    print(f"ratec {__version__} bench: {n >> 20} MiB, c={c}, "
+          f"threads={threads}, best-of-{rounds}")
+    print(f"  encode_bytes        {res['encode_bytes_mb_s']:8.2f} MB/s")
+    print(f"  encode_to_spans     {res['encode_to_spans_mb_s']:8.2f} MB/s")
+    print(f"  stream_parallel     {res['stream_parallel_mb_s']:8.2f} MB/s")
+    print(f"  stream ids (+intern){res['stream_ids_mb_s']:8.2f} MB/s")
+    print(f"  decode_bytes        {res['decode_bytes_mb_s']:8.2f} MB/s")
+    print(f"  batch_encode        {res['batch_mb_s']:8.2f} MB/s")
+    return res
