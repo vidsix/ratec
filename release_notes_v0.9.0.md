@@ -10,6 +10,23 @@ v0.9.0 closes the gap the beta named: the token stream (ids=True) no
 longer pays a serial intern pass — interning is multi-core, its
 correctness is machine-checked, and the exact lane remains bit-frozen.
 
+## The incremental arc (v0.8.x -> v0.9.0)
+
+The ids path — LM data prep with book ids — measured on the same
+10.7 MiB english corpus across the cycle (each row that host-day;
+absolute MB/s are host-dependent, the deltas are the story):
+
+| step | change | ids-path effect |
+|---|---|---|
+| v0.7.0 | spans-as-bytes API | sequential base 1.8 MB/s cold / 4.1 warm |
+| v0.8.x | rolling-hash intern + merged book slots, `batch_encode`, GIL-free raw spans, parallel decode | **5.5 cold / 7.4 warm** single engine; decode 120 -> 177 Mids/s @ 2 threads |
+| v0.9.0b | `ids=True` token stream on the parallel path + tiling theorems | ids ≈ spans lane, minus a serial intern pass |
+| v0.9.0 | the intern pass itself goes parallel (`intern_threads`) + S5 | intern **2.23–2.62× warm / 1.37–1.43× cold**; ids lane 23.93 vs spans 26.04 MB/s in the shipped bench run |
+
+Net: LM-prep token streams went from a serial afterthought to a
+multi-core path whose id equivalence is machine-checked — while the
+exact lane's outputs stayed bit-frozen through every change.
+
 ## What ships
 
 **Thread-parallel intern (`intern_threads`)** — `encode_stream_parallel
