@@ -150,16 +150,26 @@ class RateC:
 
     # --------------------------------------------------- parallel stream
     def encode_stream_parallel(self, data, chunk: int | None = 1 << 20,
-                               threads: int = 0, head_chunks: int = 1):
+                               threads: int = 0, head_chunks: int = 1,
+                               mode: str = "runs"):
         """Encode ONE long stream on many cores by chunking.
 
         The first `head_chunks` chunks run sequentially (exact judge
         adaptation); a state snapshot taken after them seeds all parallel
-        workers. Chunks therefore see a judge warmed by the head but not
-        by each other — a documented approximation of sequential
-        `encode_to_spans` (ffmpeg-style), deterministic, spans still tile
-        the input exactly and decode round-trips. For bulk LM data prep
-        on real (multi-core) boxes this is the throughput mode.
+        workers. Deterministic, spans still tile the input exactly and
+        decode round-trips. For bulk LM data prep on real (multi-core)
+        boxes this is the throughput mode.
+
+        mode="runs" (v0.8.8 default): each worker clones the head state
+        ONCE and encodes ONE CONTIGUOUS RUN of the remainder, continuing
+        its own judge — zero per-chunk state resets, and only
+        `workers - 1` approximation boundaries total (fewer than one per
+        chunk, so spans track the single-engine view closer while also
+        being faster).
+
+        mode="snapshot": the v0.8.x per-chunk model — every chunk restarts
+        from the head snapshot (clone + restore, bit-identical to the
+        pre-0.8.8 wire roundtrip), one approximation boundary per chunk.
 
         chunk=None auto-tunes: n/threads clamped to [1, 8] MiB so workers
         stay balanced and the sequential head stays a small fraction.
@@ -167,12 +177,17 @@ class RateC:
         head_chunks trades sequential work for approximation quality.
         Measured (10.7 MiB english corpus, 1 MiB chunks): span-boundary
         agreement with sequential encode_to_spans rises 0.23 / 0.35 /
-        0.46 / 0.56 for head_chunks = 1 / 2 / 3 / 4. Default 1 keeps the
-        sequential fraction minimal; raise it when patch boundaries must
-        track the single-engine view more closely.
+        0.46 / 0.56 for head_chunks = 1 / 2 / 3 / 4 (snapshot mode);
+        runs mode measures 0.59 (head_chunks=1) / 0.65 (head_chunks=2) —
+        continuing the judge across chunks both removes per-chunk state
+        resets and tracks the single-engine view closer. Default 1 keeps
+        the sequential fraction minimal; raise it when patch boundaries
+        must track the single-engine view more closely.
 
         Returns [(start, end, id|None), ...] with absolute offsets.
         """
+        if mode not in ("runs", "snapshot"):
+            raise ValueError("mode must be 'runs' or 'snapshot'")
         data = _as_bytes(data)
         n = len(data)
         if threads <= 0:
@@ -185,8 +200,7 @@ class RateC:
         from concurrent.futures import ThreadPoolExecutor
 
         head = min(max(0, head_chunks), (n + chunk - 1) // chunk - 1)
-        # 1) sequential head on a private engine; it emits its own spans and
-        #    the snapshot (taken after flush) seeds the parallel workers
+        # 1) sequential head on a private engine; it emits its own spans
         eng_head = _rc.Engine(c=self.c, store_book=False,
                               pf=self._eng.pf, exact=True,
                               carry=self._eng.carry_mode)
@@ -197,16 +211,57 @@ class RateC:
             out.extend(eng_head.feed(seg))
             consumed += len(seg)
         out.extend(eng_head.flush())          # close open tail at the boundary
-        snap = eng_head.save_state()
-        eng_head = None
-        # 2) parallel workers from the snapshot
-        starts_all = []
-
+        # v0.8.8: seed workers by CLONING the head engine (bit-identical
+        # judge state, no wire roundtrip, no map rebuild) and pre-sizing
+        # its maps for head + one chunk, so no chunk ever rehashes mid-run.
+        eng_head.reserve(chunk)
         nseen0 = consumed      # snapshot's absolute stream position
+        njobs = (n - consumed + chunk - 1) // chunk
+        nworkers = max(1, min(threads, njobs))
+        starts_all = []
+        import queue as _queue
+        pool = _queue.Queue()
+        for _ in range(nworkers):
+            pool.put(eng_head.clone())
+
+        if mode == "runs":
+            # contiguous runs: each worker clones the head state once and
+            # CONTINUES encoding its run — no per-chunk restore at all
+            spans_parts: list = [None] * nworkers
+            run_len = (n - consumed + nworkers - 1) // nworkers
+
+            def run(w: int, a: int, b: int):
+                eng = pool.get()
+                try:
+                    # a fresh clone already carries the head state; restores
+                    # are only needed on REUSE (never in this mode)
+                    sp = eng.encode_spans(data[a:b])
+                finally:
+                    pool.put(eng)
+                off = a - nseen0
+                return w, [(s + off, e + off, i) for s, e, i in sp]
+
+            jobs = []
+            for w in range(nworkers):
+                a = consumed + w * run_len
+                b = min(a + run_len, n)
+                if a < b:
+                    jobs.append((w, a, b))
+            with ThreadPoolExecutor(max_workers=nworkers) as ex:
+                for w, spans_part in ex.map(lambda j: run(*j), jobs):
+                    spans_parts[w] = spans_part
+            for part in spans_parts:
+                if part:
+                    starts_all.extend(part)
+            return out + starts_all
 
         def run(a: int, b: int):
-            eng = _rc.load_state(snap)
-            sp = eng.encode_spans(data[a:b])
+            eng = pool.get()
+            try:
+                eng.restore_from(eng_head)
+                sp = eng.encode_spans(data[a:b])
+            finally:
+                pool.put(eng)
             # engine spans continue the snapshot's absolute offsets; rebase
             # to this chunk's true position
             off = a - nseen0
@@ -218,7 +273,7 @@ class RateC:
             nxt = min(pos + chunk, n)
             jobs.append((pos, nxt))
             pos = nxt
-        with ThreadPoolExecutor(max_workers=threads or None) as ex:
+        with ThreadPoolExecutor(max_workers=nworkers) as ex:
             for spans_part in ex.map(lambda ab: run(*ab), jobs):
                 starts_all.extend(spans_part)
         return out + starts_all

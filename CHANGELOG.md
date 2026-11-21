@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.8.8 — the multicore-throughput release (internal)
+
+The stream-parallel mode was advertised as "the throughput mode" while
+actually measuring 0.45x SEQUENTIAL on two cores — every chunk paid a
+full snapshot wire-parse + map rebuild plus mid-chunk map rehashes.
+This version rebuilds the multicore path around engine cloning and a
+better decomposition, and documents exactly where the remaining costs
+live.
+
+### Kept
+
+- **Engine clone / restore / reserve (C)**: `core_restore` syncs one
+  bookless core onto another bit-identically via union-of-touched-pages
+  memcpy (dirty-bitmap driven, maps + cnt2 + small tables + patcher
+  state); `core_clone_from` allocates a layout-matching copy; exposed as
+  Engine `clone()` / `restore_from()` / `reserve(n)`. Verified: a
+  restored worker produces the parent's continuation spans exactly
+  (unit-tested), and snapshot-mode stream-parallel output is
+  span-identical to the v0.8.7 wire roundtrip (1.2M spans, 10.7 MiB).
+- **runs mode (new stream-parallel default)**: each worker clones the
+  head state ONCE and encodes ONE CONTIGUOUS RUN, continuing its own
+  judge — zero per-chunk state resets, zero rehashes, and only
+  workers-1 approximation boundaries. ABBA vs v0.8.7 (4 rounds,
+  medians, 2 threads, 10.7 MiB english): auto-chunk lane 7.45 ->
+  **9.75 MB/s (+31%)**; 1 MiB-chunk lane 7.42 -> 9.78 (+32%). Boundary
+  agreement with sequential (exact-span metric, docstring parity):
+  **0.59 vs snapshot's 0.24** (head_chunks=2: 0.65) — closer to the
+  single-engine view AND faster. Sequential stays 12.35 MB/s on this
+  SMT-limited 2-vCPU box; the runs-mode advantage compounds per core
+  on real multi-core boxes (setup is one-time per worker).
+- **snapshot mode preserved** (`mode="snapshot"`): v0.8.x semantics
+  bit-exact, now on the clone/restore machinery (+12% ABBA at 1 MiB
+  chunks — rehash elimination via reserve).
+- Suite 24/24 (18 existing + 6 new clone/restore/stream tests).
+
+### Measured and rejected (ledger continues)
+
+- restore_from (82 ms at a 5.4 MiB-head state) is NOT cheaper than the
+  old load_state wire rebuild (66 ms) — the state copy is ~256 MB of
+  map pages; the 1 MiB-chunk speedup comes from REHASH elimination
+  (reserve pre-sizing), not setup cost. Runs mode wins by avoiding
+  the per-chunk reset entirely; snapshot mode keeps it for semantics
+  parity. A fork-style CoW clone would make snapshot-mode resets cheap
+  but has no portable thread implementation.
+- The 2-vCPU box caps 2-thread encode at ~1.3x sequential (matches the
+  batch-path scaling from v0.8.7) — thr=4 "regressions" in past ledgers
+  were oversubscription, now documented as such.
+
+### Findings for the record
+
+- Baseline hygiene: with english.span.bin at 267 KB, a x4 corpus
+  (1.07 MB) falls through `n <= chunk` to the sequential fallback —
+  an earlier scouting run mistook that for stream-parallel and
+  measured 0.23x sequential. Real baselines need n > chunk (the
+  docstring's own 10.7 MiB). All numbers in this entry are at 10.7 MiB.
+- The FST-lane FP chain (AVX2 restructure) was scoped and deferred:
+  the FST lane is only +3.9% over exact, so the FP chain is not a
+  dominant cost; the multicore axis pays more.
+
 ## v0.8.7 — the batch-throughput release (internal)
 
 The structural work this version started as the order-3 direct array

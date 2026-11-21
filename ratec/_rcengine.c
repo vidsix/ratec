@@ -535,6 +535,112 @@ static int core_reserve(RcCore *e, size_t n) {
     return 0;
 }
 
+/* v0.8.8: full-state sync of one bookless core onto another with an
+ * IDENTICAL layout (same tmap/cmap capbits, same table sizes). Used by
+ * the stream-parallel worker pool: a pristine post-head engine is cloned
+ * per worker, and a per-chunk restore replaces load_state's wire parse +
+ * full map rebuild. Union-clear: pages the src touched are copied, pages
+ * only dst touched (previous chunk) are zeroed, dst's dirty bitmaps
+ * become src's — cost is proportional to the UNION of touched pages, and
+ * the judge state lands bit-identical to the src's. */
+static int core_restore(RcCore *dst, const RcCore *src) {
+    if (src->store_book || dst->store_book) return -1;
+    if (src->tmap.capbits != dst->tmap.capbits ||
+        src->cmap.capbits != dst->cmap.capbits ||
+        src->tmap.esize != dst->tmap.esize ||
+        src->cmap.esize != dst->cmap.esize) return -1;
+    /* scalar state: raw struct copy, then re-seat dst's heap buffers */
+    const uint64_t n_tm = src->tmap.n, n_cm = src->cmap.n;
+    const Map tm = dst->tmap, cm = dst->cmap;
+    const Book bk = dst->book;
+    uint32_t *c1 = dst->cnt1, *t1 = dst->tot1, *t2 = dst->tot2;
+    uint32_t *c2 = dst->cnt2;
+    uint64_t *d2 = dst->dirty2;
+    uint8_t *ob = dst->obuf;
+    const size_t ocap = dst->ocap;
+    OutVec r1 = dst->ros, r2 = dst->roe, r3 = dst->roi;
+    *dst = *src;
+    dst->cnt1 = c1; dst->tot1 = t1; dst->tot2 = t2;
+    dst->cnt2 = c2; dst->dirty2 = d2;
+    dst->tmap = tm; dst->cmap = cm; dst->book = bk;
+    dst->obuf = ob; dst->ocap = ocap;
+    dst->ros = r1; dst->roe = r2; dst->roi = r3;
+    dst->ros.n = dst->roe.n = dst->roi.n = 0;
+    dst->tmap.n = n_tm; dst->cmap.n = n_cm;
+    /* small tables: full copy (sub-MB, always consistent) */
+    memcpy(dst->cnt1, src->cnt1, 256 * 256 * 4);
+    memcpy(dst->tot1, src->tot1, 256 * 4);
+    memcpy(dst->tot2, src->tot2, 65536 * 4);
+    /* order-2 rows via the dirty bitmap (union-clear) */
+    for (uint64_t w = 0; w < 1024; w++) {
+        const uint64_t s = src->dirty2[w];
+        uint64_t work = s | (dst->dirty2[w] & ~s);
+        while (work) {
+            const int bit = __builtin_ctzll(work);
+            work &= work - 1;
+            const uint64_t c = ((uint64_t)w << 6) | (uint64_t)bit;
+            uint32_t *row = dst->cnt2 + ((size_t)c << 8);
+            if (s & (1ull << bit))
+                memcpy(row, src->cnt2 + ((size_t)c << 8), 256 * 4);
+            else
+                memset(row, 0, 256 * 4);
+        }
+        dst->dirty2[w] = s;
+    }
+    /* maps: page-granular union-clear (identical layouts) */
+    for (int which = 0; which < 2; which++) {
+        const Map *ms = which ? &src->cmap : &src->tmap;
+        Map *md = which ? &dst->cmap : &dst->tmap;
+        const uint64_t npg = (1ull << ms->capbits) >> ms->page_shift;
+        const size_t pgbytes = (size_t)md->esize << md->page_shift;
+        for (uint64_t w = 0; w < (npg >> 6) + 1; w++) {
+            const uint64_t s = ms->dirty[w];
+            uint64_t work = s | (md->dirty[w] & ~s);
+            while (work) {
+                const int bit = __builtin_ctzll(work);
+                work &= work - 1;
+                const uint64_t pg = ((uint64_t)w << 6) | (uint64_t)bit;
+                uint8_t *dd = (uint8_t *)md->e + pg * pgbytes;
+                if (s & (1ull << bit))
+                    memcpy(dd, (const uint8_t *)ms->e + pg * pgbytes, pgbytes);
+                else
+                    memset(dd, 0, pgbytes);
+            }
+            md->dirty[w] = s;
+        }
+    }
+    /* open-patch buffer (stream-parallel restores happen between chunks,
+     * right after a flush, so open_len is normally 0 — the copy is the
+     * general case and costs nothing when empty) */
+    if (src->open_len) {
+        if (dst->ocap < src->open_len) {
+            size_t nc = dst->ocap ? dst->ocap : 256;
+            while (nc < src->open_len) nc *= 2;
+            uint8_t *nb = (uint8_t *)realloc(dst->obuf, nc);
+            if (!nb) return -1;
+            dst->obuf = nb; dst->ocap = nc;
+        }
+        memcpy(dst->obuf, src->obuf, (size_t)src->open_len);
+    }
+    return 0;
+}
+
+/* allocate a layout-matching copy of a bookless core and restore into it
+ * (maps are grown to the src's CURRENT capbits so clone == src layout) */
+static RcCore *core_clone_from(const RcCore *src) {
+    if (src->store_book) return NULL;
+    RcCore *dst = core_new(src->C, 0, src->pf, (int)src->tmap.capbits,
+                           (int)src->map_capbits, src->fast, src->pmode,
+                           src->prune_after, src->prune_min);
+    if (!dst) return NULL;
+    if (src->cmap.capbits > dst->cmap.capbits &&
+        map_grow_to(&dst->cmap, src->cmap.capbits) < 0) {
+        core_free(dst); return NULL;
+    }
+    if (core_restore(dst, src) < 0) { core_free(dst); return NULL; }
+    return dst;
+}
+
 /* one order-3..5 context: prediction + state update, interleaved.
  * cold -> 1 probe; window hit/new -> 1 probe; promoted -> 2 probes. */
 #define DO_ORDER_PM(OI, LN) \
@@ -1302,6 +1408,7 @@ fail:
 
 #ifndef RC_STANDALONE
 /* ------------------------------------------------------- Python object */
+static PyTypeObject Engine_Type;   /* forward: clone() allocates instances */
 typedef struct {
     PyObject_HEAD
     RcCore *core;
@@ -1568,6 +1675,59 @@ static PyObject *Engine_save_state(EngineObj *self, PyObject *Py_UNUSED(ig)) {
     free(g.p);
     return out;
 }
+/* v0.8.8: worker-side engine cloning for encode_stream_parallel. A clone
+ * carries the parent's judge/patcher state bit-identically (no wire
+ * roundtrip, no map rebuild); per-chunk restore_from(parent) then costs
+ * only a union-of-touched-pages memcpy. Bookless cores only (the stream
+ * path never interns). */
+static PyObject *Engine_clone(EngineObj *self, PyObject *Py_UNUSED(ig)) {
+    if (!Eng_busy(self)) return NULL;
+    if (self->core->store_book) {
+        PyErr_SetString(RatecError,
+                        "clone requires store_book=False (stream/worker use)");
+        return NULL;
+    }
+    RcCore *c = core_clone_from(self->core);
+    if (!c) return PyErr_NoMemory();
+    EngineObj *out = (EngineObj *)Engine_Type.tp_alloc(&Engine_Type, 0);
+    if (!out) { core_free(c); return NULL; }
+    out->busy = 0;
+    out->core = c;
+    return (PyObject *)out;
+}
+static PyObject *Engine_restore_from(EngineObj *self, PyObject *other) {
+    if (!Eng_busy(self)) return NULL;
+    if (!PyObject_TypeCheck(other, &Engine_Type)) {
+        PyErr_SetString(RatecError, "restore_from expects an Engine");
+        return NULL;
+    }
+    EngineObj *src = (EngineObj *)other;
+    if (src->busy) {
+        PyErr_SetString(RatecError, "source engine is busy");
+        return NULL;
+    }
+    int rc;
+    Py_BEGIN_ALLOW_THREADS
+    rc = core_restore(self->core, src->core);
+    Py_END_ALLOW_THREADS
+    if (rc < 0) {
+        PyErr_SetString(RatecError,
+                        "restore_from: incompatible engines (book state or "
+                        "map capacity differs)");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+static PyObject *Engine_reserve(EngineObj *self, PyObject *arg) {
+    if (!Eng_busy(self)) return NULL;
+    long long n = PyLong_AsLongLong(arg);
+    if (n < 0) {
+        PyErr_SetString(PyExc_ValueError, "reserve expects n >= 0");
+        return NULL;
+    }
+    if (core_reserve(self->core, (size_t)n) < 0) return PyErr_NoMemory();
+    Py_RETURN_NONE;
+}
 static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
     if (!self->core->store_book) {
         PyErr_SetString(RatecError, "decode_bytes requires store_book=True");
@@ -1768,6 +1928,13 @@ static PyMethodDef Engine_methods[] = {
      "reset() -> cold engine (fresh tables)."},
     {"save_state",   (PyCFunction)Engine_save_state,   METH_NOARGS,
      "save_state() -> bytes snapshot of the full engine state."},
+    {"clone",        (PyCFunction)Engine_clone,        METH_NOARGS,
+     "clone() -> Engine — bit-identical bookless copy (no wire roundtrip)"},
+    {"restore_from", (PyCFunction)(void (*)(void))Engine_restore_from, METH_O,
+     "restore_from(engine) — sync this engine's state from another "
+     "(bit-identical; union-of-touched-pages cost; bookless only)"},
+    {"reserve", (PyCFunction)(void (*)(void))Engine_reserve, METH_O,
+     "reserve(n) — pre-size the context maps for an n-byte run"},
     {"book_dump",    (PyCFunction)Engine_book_dump,    METH_NOARGS,
      "book_dump() -> [bytes, ...] the vocabulary, index == id."},
     {NULL, NULL, 0, NULL}
