@@ -239,10 +239,7 @@ def main():
             break
         eng = ratec.RateC.from_state(snaps[name][0])
         got = [int(s) for s, _, _ in eng.encode_to_spans(cont)]
-        # base-relative vs the golden's lifetime-absolute starts (the api
-        # rebases encode_to_spans to the call's input since v0.9.0rc)
-        _abs = gold["starts_absolute"]
-        if got != [a - _abs[0] for a in _abs]:
+        if got != gold["starts_absolute"]:
             ok_gold, why_gold = False, (
                 f"{name}: continuation diverges "
                 f"({len(got)} vs {gold['n_patches_cont']} patches)")

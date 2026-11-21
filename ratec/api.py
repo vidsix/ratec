@@ -370,7 +370,16 @@ class RateC:
     def _stream_ids_tail(self, data, starts, ends, *, ids, as_arrays,
                          intern_threads=1):
         """Shared tail of encode_stream_parallel: attach the intern-pass
-        token stream (ids=True) or convert back to tuples."""
+        token stream (ids=True) or convert back to tuples. The span
+        arrays are rebased to THIS call's input (the intern pass
+        validates call-local tiling; a continued engine emits
+        lifetime-absolute offsets — v0.9.0rc fix, ids are
+        content-derived so the rebasing cannot change them)."""
+        if len(starts):
+            base = int(starts[0])
+            if base:
+                starts = starts - base
+                ends = ends - base
         if ids:
             if intern_threads > 1:
                 raw = self._eng.intern_spans_parallel(
@@ -397,32 +406,20 @@ class RateC:
         uint32 ndarrays instead of per-span tuples — the same values
         with ~50x less Python-object allocation (the tuple path costs
         ~3 objects per span, GIL-held; arrays are two memcpys + two
-        numpy wraps). Spans tile THIS call's input (start 0, end
-        len(data)) on warm engines too — v0.9.0rc rebases the engine's
-        lifetime stream position out; feed()/flush() keep
-        lifetime-absolute spans as documented."""
+        numpy wraps). Spans are lifetime-absolute stream offsets: a
+        continued engine's spans run past earlier calls (subtract
+        starts[0] for call-local tiling) — the same convention as
+        feed()/flush()."""
         data = _as_bytes(data)
-        # The C emit is absolute in the engine's LIFETIME stream; the
-        # spans contract is "tile THIS call's input exactly" (v0.9.0rc
-        # fix: warm engines leaked their consumed-bytes counter into
-        # start/end and the intern path's tiling validation caught it).
-        # feed()/flush() keep their documented lifetime-absolute spans.
+        # Spans are LIFETIME-ABSOLUTE stream offsets (as the v4/v6 goldens
+        # and the dataset builder rely on): a continued engine's spans run
+        # past earlier calls — subtract starts[0] for call-local tiling.
+        # encode_stream_parallel does that rebasing for the ids path.
         if as_arrays:
             sb, eb = self._eng.encode_spans_raw(data)
-            starts = np.frombuffer(sb, dtype=np.uint32)
-            ends = np.frombuffer(eb, dtype=np.uint32)
-            if len(starts):
-                base = int(starts[0])
-                if base:
-                    starts = starts - base
-                    ends = ends - base
-            return (starts, ends)
-        spans = self._spans(data)
-        if spans:
-            base = spans[0][0]
-            if base:
-                spans = [(st - base, en - base, i) for (st, en, i) in spans]
-        return spans
+            return (np.frombuffer(sb, dtype=np.uint32),
+                    np.frombuffer(eb, dtype=np.uint32))
+        return self._spans(data)
 
     def encode_batch(self, docs: Sequence, threads: int = 0):
         """Parallel spans for independent docs (bookless, GIL released).

@@ -186,11 +186,7 @@ for c in (20, 33):
         ok_v4 = False
         print(f"    v4 c{c}: c restored as {t4.c}")
     got = [int(s) for s, _, _ in t4.encode_to_spans(cont_v4)]
-    # encode_to_spans is call-relative since v0.9.0rc; the golden keeps
-    # lifetime-absolute starts — compare the segmentation base-relatively
-    _abs = gold["starts_absolute"]
-    _rel = [a - _abs[0] for a in _abs]
-    if got != _rel:
+    if got != gold["starts_absolute"]:
         ok_v4 = False
         print(f"    v4 c{c}: continuation diverges "
               f"({len(got)} vs {len(gold['starts_absolute'])} patches)")

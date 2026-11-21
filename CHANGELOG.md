@@ -36,16 +36,23 @@ carries the performance contract forward with fresh measured numbers.
 
 ### Fixed (the polish-pass catch)
 
-- **`encode_to_spans` on a warm engine leaked the engine's lifetime
-  stream position into the span offsets** (a 300-byte call on an engine
-  that had consumed 3000 bytes returned spans starting at 3000; the
-  as_arrays path drifted further after each call). The contract says
-  spans tile THIS call's input; both the tuple and the as_arrays paths
-  now rebase to the call (start 0, end len(data)). `feed()`/`flush()`
-  keep their documented lifetime-absolute semantics. Found BY the
-  parallel intern's tiling validation on the second call of a
-  bench-style loop — the check did its job. Regression test:
-  `test_warm_engine_spans_tile_their_input`.
+- **`encode_stream_parallel(ids=True)` failed on a continued engine.**
+  The api's simple path handed `encode_to_spans` output to the intern
+  pass as-is; `encode_to_spans` spans are LIFETIME-ABSOLUTE stream
+  offsets (the documented convention the v4/v6 goldens and the dataset
+  builder rely on), while the intern pass validates call-local tiling
+  — so the second ids call on one engine raised "spans must tile the
+  stream exactly". The ids path now rebases its span arrays to the
+  call before interning (ids are content-derived, so the rebasing
+  cannot change them; both calls of a bench-style loop now produce
+  identical ids and round-trip). The parallel (chunked) path was
+  already call-relative; the simple path now matches it.
+  Regression test: `test_warm_engine_stream_ids_call_relative`.
+- **Documentation correction:** `encode_to_spans`' spans were described
+  as "tiles the input exactly" without the continued-engine caveat —
+  the docstring and README now state the lifetime-absolute convention
+  precisely (subtract starts[0] for call-local tiling). Found BY the
+  intern pass's tiling validation — the check did its job.
 
 ### Honest ledger
 

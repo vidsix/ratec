@@ -114,20 +114,21 @@ def test_parallel_intern_requires_book():
             np.asarray([3], dtype=np.uint32).tobytes(), 2)
 
 
-def test_warm_engine_spans_tile_their_input():
-    """v0.9.0rc regression: a warm engine's lifetime position must not
-    leak into encode_to_spans offsets (the intern path's tiling
-    validation caught the leak)."""
+def test_warm_engine_stream_ids_call_relative():
+    """v0.9.0rc regression: a continued engine must not break the ids
+    path — encode_stream_parallel rebases its span arrays to the call
+    (encode_to_spans itself keeps the documented lifetime-absolute
+    offsets that the goldens and the dataset builder rely on)."""
     data = b"abc" * 1000
     r = ratec.RateC(c=20, store_book=True)
     first = r.encode_stream_parallel(data, ids=True)
     assert r.decode_bytes(first[2]) == data
-    # second call: the engine is warm now — spans must still tile
+    # second call: the engine is warm — still round-trips, spans 0-based
     second = r.encode_stream_parallel(data, ids=True)
     assert r.decode_bytes(second[2]) == data
+    assert int(second[0][0]) == 0 and int(second[1][-1]) == len(data)
+    # ids count tracks the (adapted) segmentation, not the first call
+    assert len(second[2]) == len(second[0])
+    # encode_to_spans keeps lifetime-absolute offsets on a warm engine
     s, e = r.encode_to_spans(data[:300], as_arrays=True)
-    assert int(s[0]) == 0 and int(e[-1]) == 300
-    for st, en, _i in r.encode_to_spans(data[:300]):
-        pass
-    tup = r.encode_to_spans(data[:300])
-    assert tup[0][0] == 0 and tup[-1][1] == 300
+    assert int(s[0]) == 2 * len(data) and int(e[-1]) == 2 * len(data) + 300
