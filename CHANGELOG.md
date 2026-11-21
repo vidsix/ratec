@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.9.0b — the token-stream beta (ids for stream-parallel encoding)
+
+The beta for v0.9.0: the parallel path finally emits the LM-prep token
+stream (ids=True), the interface got a self-benchmarking performance
+contract with clear numbers, and the machine-checked story grew a
+tiling theorem that makes the fast lane's approximation provably safe.
+
+### Kept
+
+- **`encode_stream_parallel(..., ids=True)`**: returns `(starts, ends,
+  ids)` uint32 arrays — the token stream for the PARALLEL segmentation.
+  The parallel workers stay bookless and GIL-free; ONE sequential
+  intern-only pass (`Engine.intern_spans`, new C method) walks the
+  finished spans, recomputes each patch's fnv-1a, and interns into the
+  instance's book. Interning is a pure function of span contents +
+  order: feeding the SEQUENTIAL engine's spans through `intern_spans`
+  reproduces the sequential `encode_bytes` ids **bit-exactly** (suite
+  gate). The tiling is validated in C before interning (spans must
+  partition the stream), so `decode_bytes(ids)` round-trips exactly.
+  The book persists across calls — repeated streams share one
+  vocabulary. Measured: the intern pass adds ~5-15% time on slower
+  host-days, ~free on fast ones (25.05 vs 24.52 MB/s spans-only in the
+  shipped BENCHMARKS.md run).
+- **`ratec.bench()` + `BENCHMARKS.md`**: the library now documents its
+  own performance contract with measured numbers — six entry points,
+  best-of-N, host-variance warning (same code measured 7.3-17.8 MB/s
+  across sandbox sessions; the RELATIVE ordering is the contract), the
+  per-entry GIL/threading behavior, and the honest tried-and-rejected
+  ledger.
+- **LEAN `RatecTiling.lean`** (third machine-checked file, no sorry):
+  T1 — the tiling invariant survives every byte in all four patcher
+  branches (join, forced single byte, close+join, forced escape);
+  T2 — after n bytes the closed spans plus the open patch partition
+  [0, n) for ANY surprisal function, so lane choice and future
+  approximations cannot break segmentation; T3 — span lengths sum to
+  the stream length (decode output size). Helpers: `covers_append`,
+  `covers_concat`, `covers_end_ge`.
+
+### Rejected (measured, documented, reverted)
+
+- **FST-lane AVX2 float32 term pass** — the ledger's deferred item.
+  The six per-order double divisions became one 8-wide float32 pass
+  (vrcpps + one Newton step, miss-lane blend). Isolated microbench
+  **1.7x faster** (5.6 vs 9.8 ns/byte). Lane-level: **-4%** (helper
+  integration), **-8.9%** (inline AVX2 clone of the whole loop). The
+  judge loop is probe/memory-bound — the FP chain is ~9% of the byte
+  cost — and the whole-loop -mavx2 clone cost more than the FP
+  savings. Reverted fully; the exact lane never left its bit-frozen
+  state (suite gate green throughout), legacy FST stays (+2.5-7.5%
+  over exact, host-dependent).
+
+### Gates
+
+suite 35/35 (30 + 5 new ids tests: intern==sequential bit-exact, both
+mode roundtrips, vocabulary persistence, bookless rejection, bad-tiling
+rejection) + bit-exactness gate + snapshot fuzz.
+
 ## v0.8.9 — the GIL-free + parallel-decode release (internal)
 
 Two structural multithreaded costs were named, measured, and removed:
