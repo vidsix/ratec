@@ -82,8 +82,10 @@ def main():
             "c": kw["c"],
             "carry": bool(kw.get("carry", False)),
             "store_book": bool(kw["store_book"]),
-            # encode spans are absolute stream offsets (nseen = warm_len)
-            "starts_absolute": got,
+            # encode spans are call-relative since v0.9.0rc (encode_to_spans
+            # rebases the engine's lifetime position); the goldens keep
+            # lifetime-absolute starts = call-relative + warm_len
+            "starts_absolute": [g + len(warm) for g in got],
             "n_patches_cont": len(got),
         }
         with open(os.path.join(TD, f"{name}.bin"), "wb") as f:
