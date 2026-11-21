@@ -1814,6 +1814,87 @@ static PyObject *Engine_decode_batch(EngineObj *self, PyObject *args,
     self->busy = 0;
     return res;
 }
+
+/* v0.9.0b: intern-only pass — the ids side of stream-parallel encoding.
+ * Given a stream and its span tiling (from any lane), interns each
+ * span's bytes into THIS engine's book in encounter order and returns
+ * the ids as raw little-endian uint32. Pure book work: the judge is not
+ * consulted, so ids depend only on span CONTENTS and order — interning
+ * the same spans through the same book reproduces the sequential
+ * engine's ids bit-exactly (first-seen order, same fnv-1a step as the
+ * inline emit path). The tiling is validated (spans must partition the
+ * stream), so the ids decode round-trip exactly via
+ * decode_bytes/decode_batch. */
+static PyObject *Engine_intern_spans(EngineObj *self, PyObject *args) {
+    if (!Eng_busy(self)) return NULL;
+    if (!self->core->store_book) {
+        PyErr_SetString(RatecError,
+                        "intern_spans requires store_book=True");
+        return NULL;
+    }
+    Py_buffer vd, vs, ve;
+    if (!PyArg_ParseTuple(args, "y*y*y*", &vd, &vs, &ve))
+        return NULL;
+    self->busy = 1;
+    PyObject *out = NULL;
+    if (vs.len != ve.len || vs.len % 4 != 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "starts/ends must be equal-length uint32 buffers");
+        goto done;
+    }
+    const size_t m = (size_t)vs.len / 4;
+    const uint8_t *data = (const uint8_t *)vd.buf;
+    const size_t dlen = (size_t)vd.len;
+    const uint32_t *st = (const uint32_t *)vs.buf;
+    const uint32_t *en = (const uint32_t *)ve.buf;
+    /* tiling validation: spans must partition [0, dlen) */
+    if (m > 0 && (st[0] != 0 || en[m - 1] != dlen)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "spans must tile the stream exactly "
+                        "(start 0, end == len)");
+        goto done;
+    }
+    for (size_t k = 0; k < m; k++) {
+        if (en[k] <= st[k] || en[k] > dlen ||
+            (k + 1 < m && en[k] != st[k + 1])) {
+            PyErr_Format(PyExc_ValueError,
+                         "span %zu does not tile the stream "
+                         "(start %u, end %u)", k, st[k], en[k]);
+            goto done;
+        }
+    }
+    out = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(m * 4));
+    if (!out) goto done;
+    uint32_t *ids = (uint32_t *)PyBytes_AS_STRING(out);
+    Book *bk = &self->core->book;
+    int failed = 0;
+    Py_BEGIN_ALLOW_THREADS
+    for (size_t k = 0; k < m; k++) {
+        const uint8_t *p = data + st[k];
+        const size_t cl = (size_t)(en[k] - st[k]);
+        uint64_t h = 0xcbf29ce484222325ull;   /* same fnv-1a step as the
+                                                 inline emit path */
+        for (size_t q = 0; q < cl; q++)
+            h = (h ^ p[q]) * 0x100000001b3ull;
+        const uint32_t id = book_intern_h(bk, p, cl, h);
+        if (id == ID_NONE) {                  /* book allocation failure */
+            failed = 1;
+            break;
+        }
+        ids[k] = id;
+    }
+    Py_END_ALLOW_THREADS
+    if (failed) {
+        Py_CLEAR(out);
+        PyErr_SetString(RatecError, "book interning failed (allocation)");
+    }
+done:
+    PyBuffer_Release(&vd);
+    PyBuffer_Release(&vs);
+    PyBuffer_Release(&ve);
+    self->busy = 0;
+    return out;
+}
 static PyObject *Engine_flush(EngineObj *self, PyObject *Py_UNUSED(ignored)) {
     if (!Eng_busy(self)) return NULL;
     self->busy = 1;
@@ -2203,6 +2284,10 @@ static PyMethodDef Engine_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "decode_batch(ids_list, threads=0) -> list[bytes] — thread-parallel "
      "book read (uint32 LE buffers; ids must come from this book)"},
+    {"intern_spans", (PyCFunction)Engine_intern_spans, METH_VARARGS,
+     "intern_spans(data, starts, ends) -> raw uint32 LE ids — interns the "
+     "span tiling into this engine's book in encounter order (ids side of "
+     "stream-parallel encoding; judge not consulted)"},
     {"reset",        (PyCFunction)Engine_reset,        METH_NOARGS,
      "reset() -> cold engine (fresh tables)."},
     {"save_state",   (PyCFunction)Engine_save_state,   METH_NOARGS,
