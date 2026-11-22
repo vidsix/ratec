@@ -491,6 +491,14 @@ paths to raw speed.
     tiling, intern equivalence). The pipelined variant was measured,
     found unsound (book growth vs concurrent pre-probes) and reverted;
     the barriered design kept the warm-book win. See BENCHMARKS.md.
+17. **The road to v1.0.0 (active)** — the first stable release: a
+    quiet-box performance envelope with per-lane floors, proof-first
+    cold-book parallel intern (LEAN S6 before any C), snapshot v8
+    (explicit endianness), the error taxonomy, `chunked_prep` for
+    beyond-4-GiB prep, the ecosystem bridges (tokenizer.json, GGUF,
+    vLLM), then the API freeze + aarch64 wheels. Increments: v0.9.1
+    (hardening) and v0.9.2 (production shapes) gate against the
+    frozen v1.0.0 contract. Plan: `docs/PLAN_v0.9.md`.
 
 
 ## Layout
@@ -526,6 +534,7 @@ lean/
 docs/
   ARCHITECTURE.md    ids-path architecture, invariants, defaults audit
   PLAN_v0.8.md       the v0.8 plan (speed campaign)
+  PLAN_v0.9.md       the v0.9.1/v0.9.2 plan + the frozen v1.0.0 contract
   smollm2_port.md    the LM port, precisely
   PROFILING.md       the ablation profile behind the v2 engine
   v04_design.md      what landed / was measured / was declined, with numbers
