@@ -6,7 +6,8 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.9.0, experimental. The C core and byte-level semantics are
+> **Status:** v0.9.1, experimental — the hardening release (road to
+> v1.0.0). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -499,6 +500,17 @@ paths to raw speed.
     vLLM), then the API freeze + aarch64 wheels. Increments: v0.9.1
     (hardening) and v0.9.2 (production shapes) gate against the
     frozen v1.0.0 contract. Plan: `docs/PLAN_v0.9.md`.
+18. **~~v0.9.1 — the hardening release~~ done (v0.9.1)** — the quiet-box
+    envelope (`research/quietbox_envelope.json`, the 1.0 floors anchor:
+    ids/spans cold 103.4% / warm 99.4% on the P1.2 gate), LEAN S6
+    (read-stable merge — discharged proof-first), snapshot v8 (explicit
+    LE + the executable BE-host simulation), the coded error taxonomy
+    (`RatecErrorCode`, 34 mapped sites), public `reserve=` +
+    `rehash_count()`, `chunked_prep` (8 GiB gate), `export_tokenizer_json`
+    (HF bridge), S7 + S9 proofs, CI lean (active-sorry gate) + aarch64
+    jobs. CHANGELOG has the full record. Remaining to 1.0: v0.9.2
+    production shapes (per-order tables, GGUF/vLLM, nightly soak, S8)
+    and the freeze audit.
 
 
 ## Layout

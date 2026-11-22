@@ -1,6 +1,16 @@
 # PLAN_v0.9 — hardening, proofs, and the road to v1.0.0 (production at scale)
 
-Status: draft, written against v0.9.0 (b828df2). Every baseline below is
+Status: implemented in v0.9.1 (the hardening scope below shipped;
+the v1.0.0 contract and the v0.9.2/1.0 scopes remain the roadmap).
+Two grounded refinements recorded against the draft: (1) the error
+taxonomy gained an 8th code, STATE — two OOM-adjacent engine-state
+sites (poisoned after MemoryError, batch worker allocation failure)
+fit no caller-facing code; (2) the "quiet-box" is a protocol, not a
+host claim — the sandbox exposes no cpufreq governor, so the quieting
+is min-of-round-medians + round-robin interleave, recorded with full
+provenance in the envelope. Original draft below, unchanged.
+
+Draft status: written against v0.9.0 (b828df2). Every baseline below is
 measured and lives in BENCHMARKS.md / CHANGELOG / the research records;
 absolute MB/s are host-day-dependent on this recycled sandbox — the
 deltas and orderings are the stable signal. Nothing here is approved

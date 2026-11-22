@@ -7,8 +7,9 @@ Exit 0 only if every check passes.
 
 What is asserted here (and what is deliberately NOT):
   - the DEFAULT path is untouched: prune off == prune kwarg absent (ids,
-    spans, snapshot bytes); non-prune snapshots stay format v6 (byte-
-    identical to v0.6.0 output). The broader default-path bit-exactness vs
+    spans); non-prune snapshots are format v8 (v0.9.1 write path: the
+    v7 layout explicit-LE, prune presence as a header flag — the v6
+    goldens still LOAD unchanged, read-side back-compat). The broader default-path bit-exactness vs
     the reference pipeline is gate_bitexact.py's job and must not move.
   - prune mechanics: singletons are dropped at absolute-offset boundaries,
     survivors renumber dense, counts restart per window, n_pruned counts.
@@ -78,8 +79,14 @@ spans_ref = spans_of(t_ref, DATA)
 t_ref2 = ratec.RateC(c=20)
 ids_ref = t_ref2.encode_bytes(DATA)       # fresh cold engine
 snap_ref = t_ref2._eng.save_state()       # post-encode v6 snapshot
-check("prune kwarg absent == prune=False (format v6)",
-      snap_ref[4] == 6 and ratec.RateC(c=20, prune=False)._eng.save_state()[4] == 6)
+# v0.9.1: the write path is v8-only (explicit LE) — the version byte is
+# 8 for prune AND non-prune engines; the prune section's presence moved
+# into the header flag byte (offset 42), so "default path untouched"
+# means: same version, flag 0, byte-identical payload across configs.
+check("prune kwarg absent == prune=False (format v8, flag 0)",
+      int.from_bytes(snap_ref[4:8], "little") == 8
+      and snap_ref[42] == 0
+      and ratec.RateC(c=20, prune=False)._eng.save_state()[42] == 0)
 t_off = ratec.RateC(c=20, prune=False)
 ids_off = t_off.encode_bytes(DATA)
 t_off2 = ratec.RateC(c=20, prune=False)
@@ -107,8 +114,9 @@ _ = t_cnt.encode_bytes(DATA)
 check("book shrinks + n_pruned counts",
       t_cnt.book_size < 3000 and t_cnt.n_pruned > 0,
       f"book {t_cnt.book_size} (unpruned ~3269), pruned {t_cnt.n_pruned}")
-check("prune-mode snapshot is format v7",
-      t_cnt._eng.save_state()[4] == 7)
+check("prune-mode snapshot is format v8 with prune flag",
+      int.from_bytes(t_cnt._eng.save_state()[4:8], "little") == 8
+      and t_cnt._eng.save_state()[42] == 1)
 
 # ============================================================ 3. determinism
 print("3. determinism (outputs, across engines and chunkings)")

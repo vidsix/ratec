@@ -1,5 +1,123 @@
 # Changelog
 
+## v0.9.1 — the hardening release (the road to v1.0.0 begins)
+
+Everything the 1.0 stability contract needs that v0.9.0 did not have:
+a measured perf anchor, a machine-checked license for the cold-book
+intern, an endianness-honest snapshot format, a coded error taxonomy,
+the scale helper, and the ecosystem bridge. Full contract:
+`docs/PLAN_v0.9.md`; every number below is in a committed record.
+
+### P1 — performance (the quiet-box anchor)
+
+- **The quiet-box envelope (P1.1)**: `bench/bench_envelope.py` →
+  `research/quietbox_envelope.json` — min-of-3-round medians,
+  round-robin interleave across ALL lanes, cold AND warm stream pairs,
+  full provenance (loadavg before/after, the governor probe result —
+  this container has no cpufreq sysfs, recorded as such — CPU state,
+  affinity, exactness cross-checks on all four shipped domains). The
+  1.0 per-lane floors are RATIOS of this record, so a re-issue on a
+  better host lifts the floors, never the ratios. BENCHMARKS.md's lane
+  table is regenerated from the record (`make tables` now guards both
+  README and BENCHMARKS). P1.2's gate ratio, on the same record:
+  ids/spans **cold 103.4%**, warm **99.4%** (gate ≥ 95%: PASS both).
+- **LEAN S6 — the read-stable merge protocol (P4.6)**: `probe_hit_eq_gid`,
+  `probe_miss_eq_gid`, `resolve_eq_gid`, `ids_stable_interleave` in
+  `lean/RatecIntern.lean` — a reader probing the live tables while the
+  ordered merge inserts resolves the SEQUENTIAL id at any linearization
+  step; a miss has no third outcome. Discharged BEFORE any read-stable C
+  lands (the pipelined attempt was unsound; S6 licenses the
+  frozen-secondary + epoch-check design, and the C comments must cite
+  the theorem names when it lands).
+
+### P2 — robustness
+
+- **RatecError carries codes (P2.3)**: every raise site maps to a fixed
+  taxonomy — `TILING`, `BOOKLESS`, `CAP_EXHAUSTED`, `BUFFER_LIMIT`,
+  `SNAPSHOT_INVALID`, `SNAPSHOT_VERSION`, `ARGUMENT`, `STATE` — exposed
+  as `ratec.RatecErrorCode` (a str-Enum; `.code` is the plain string).
+  The draft plan's 7 codes gained `STATE`: two OOM-adjacent engine-state
+  sites (poisoned after MemoryError, batch worker allocation failure)
+  fit no caller-facing code — recorded here as the refinement, every
+  site mapped either way. `tests/test_errors.py` asserts each code at
+  each reachable site via the public API AND audits the source-level
+  mapping (34 sites); the spans-must-tile rejections moved from bare
+  `ValueError` to coded `RatecError` (TILING) — pipelines can finally
+  branch on codes, never on message strings.
+- **Snapshot v8 — explicit little-endian (P2.2)**: the v7 layout with
+  byte order as part of the FORMAT, not the host; the prune section's
+  presence moves from the version byte into a header flag. v2..v7 still
+  LOAD (read-side back-compat; their historical native-endian layout is
+  documented as same-endian-only), the write path is v8-only. Gates:
+  the v8 golden battery (`tests/gen_v8_goldens.py`: c20 book / c33
+  stream / c20 carry, sha256-bound, continuation bit-exact,
+  save(load(snap)) byte-identity), an INDEPENDENT pure-Python LE parser
+  walking the golden to exact EOF (`tests/test_v8.py`), and an
+  executable big-endian-host simulation (`tests/test_be_sim.py`):
+  built with `RATEC_SIMULATE_BIG_ENDIAN` (native scalar reads swap), a
+  v8 blob's bytes are IDENTICAL across the normal and BE-simulated
+  builds and a LE-written v6 golden correctly FAILS to load on the
+  simulated BE host — the historical limitation v8 removes,
+  demonstrated instead of folklore. Unknown versions now classify as
+  coded `SNAPSHOT_VERSION` (the version check precedes body
+  validation); everything else invalid stays `SNAPSHOT_INVALID`.
+  LEAN S9 (`lean/RatecSnapshot.lean`) machine-checks the rejection
+  totality + precedence: exactly three outcomes, version dominance,
+  magic-gates-first.
+- **`chunked_prep` (P2.1)**: the span-scale pattern becomes a tested
+  helper — an arbitrarily long stream (bytes or a lazy chunk iterable,
+  flat RSS via `sink=`) is split into ≤ `engine_bytes` segments, each
+  encoded on a FRESH engine, byte-identical to explicit per-segment
+  engines. Gate: an 8 GiB synthetic prep job (32 × 256 MiB engines on
+  this 3 GB-RAM sandbox) completes with per-segment sha256-identical
+  ids/spans against standalone engines — `bench/gate_8gib.py` →
+  `research/gate_8gib.json`.
+- **Public `reserve=` (P1.5)**: `RateC(reserve=n)`,
+  `batch_encode(reserve=)`, `batch_spans(reserve=)` expose the
+  engine's context-map pre-sizing, with the instrumented half of the
+  gate: `RateC.rehash_count()` counts growth rehashes since engine
+  birth. Reserve changes capacity, never semantics (ids identical).
+
+### P3 — ecosystem
+
+- **`export_tokenizer_json` (P3.1)**: a trained engine's book becomes
+  an HF `tokenizer.json` WordLevel vocab (latin-1 byte↔char, invertible
+  by construction). Contract, tested: for every id the engine produces,
+  `vocab[token] == id`, and decoding a ratec ids stream through the
+  vocab inverse yields `decode_bytes(ids)` exactly. BOOKLESS engines
+  reject with the coded error.
+
+### P4 — proofs
+
+- **S7 — decode completeness** (`lean/RatecDecode.lean`):
+  `decode_roundtrip` — with the intern's book and ids, decode
+  reproduces the stream EXACTLY, byte for byte;
+  `decode_error_iff` — a decode fails exactly when some id is out of
+  range (the documented coded error), never a partial output.
+- **S9 — snapshot rejection totality** (`lean/RatecSnapshot.lean`):
+  exactly three load outcomes (`ok` / `invalid` / `version v`), the
+  version check precedes body validation (SNAPSHOT_VERSION means
+  "format version", never "corrupt bytes"), wrong magic always wins
+  as invalid.
+
+### CI
+
+- **lean job**: installs elan from the committed `lean/lean-toolchain`
+  pin (v4.36.0), runs the active-sorry gate (comments/doc mentions
+  excluded), compiles all six proof files no-sorry.
+- **aarch64 job**: `ubuntu-24.04-arm` — the portability claim becomes a
+  build artifact: build + `make test` + pytest on arm64.
+
+### Tests
+
+- 17 new pytest tests across `test_errors.py` (per-site codes + source
+  mapping audit), `test_v8.py` (goldens + write-path + LE walk),
+  `test_v091.py` (reserve/chunked_prep/exporter), `test_be_sim.py`
+  (the BE-host simulation contract). The v0.7-era prune version
+  assertions updated to the v8 contract; test_snapfuzz's layout parser
+  now walks v6/v7/v8 (field sizes identical, v8 shifts post-carry
+  offsets by the flag byte).
+
 ## v0.9.0 — the parallel-intern release (token streams at full speed)
 
 > Shipped after one RC (v0.9.0rc) whose polish pass caught and fixed

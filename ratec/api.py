@@ -15,6 +15,7 @@ True
 """
 from __future__ import annotations
 
+import enum
 import zlib
 from typing import Iterable, Sequence
 
@@ -22,8 +23,33 @@ import numpy as np
 
 from . import _rcengine as _rc
 
-__all__ = ["RateC", "RatecError", "patch_from_sur", "batch_spans", "__version__"]
+__all__ = ["RateC", "RatecError", "RatecErrorCode", "patch_from_sur",
+           "batch_spans", "chunked_prep", "export_tokenizer_json",
+           "__version__"]
 RatecError = _rc.RatecError
+
+
+class RatecErrorCode(str, enum.Enum):
+    """The error taxonomy (PLAN_v0.9 P2.3) — every RatecError carries a
+    .code from this fixed set; pipelines branch on codes, never on
+    message strings. .code is the plain string value (the C sets it);
+    `RatecErrorCode(err.code)` converts. The C raise-site mapping is
+    asserted per site by tests/test_errors.py and the mapping table
+    lives in _rcengine.c's ratec_err comment block."""
+    TILING = "TILING"                        # spans must partition the stream
+    BOOKLESS = "BOOKLESS"                    # operation needs store_book=True
+    CAP_EXHAUSTED = "CAP_EXHAUSTED"          # raise map_capbits / chunk it
+    BUFFER_LIMIT = "BUFFER_LIMIT"            # 4 GiB uint32 span space hit
+    SNAPSHOT_INVALID = "SNAPSHOT_INVALID"    # corrupt/truncated/incompatible state
+    SNAPSHOT_VERSION = "SNAPSHOT_VERSION"    # state format version not understood
+    ARGUMENT = "ARGUMENT"                    # caller-side contract violation
+    STATE = "STATE"                          # engine poisoned/busy/internal failure
+
+
+# NOTE: STATE is the plan's 7-code draft + 1 — two OOM-adjacent engine-
+# state sites (poisoned after MemoryError, batch worker allocation
+# failure) fit no caller-facing code; recorded in CHANGELOG as the
+# documented refinement.
 
 
 class RateC:
@@ -82,16 +108,26 @@ class RateC:
                  warm_state=None, prebits: int = 16, map_capbits: int = 22,
                  exact: bool = True, carry: bool = False,
                  prune: bool = False, prune_after: int = 1 << 20,
-                 prune_min: int = 2):
+                 prune_min: int = 2, reserve: int | None = None):
         if prune and prune_after < 1:
             raise ValueError("prune_after must be >= 1 when prune=True")
         if prune_min < 1:
             raise ValueError("prune_min must be >= 1")
+        if reserve is not None and reserve < 0:
+            raise ValueError("reserve must be >= 0")
         self._eng = _rc.Engine(c=c, store_book=store_book, pf=pf,
                                prebits=prebits, map_capbits=map_capbits,
                                exact=exact, carry=carry,
                                prune_after=prune_after if prune else 0,
                                prune_min=prune_min)
+        if reserve is not None:
+            # v0.9.1 public reserve=: pre-size the context maps for an
+            # n-byte run before the first encode — a sized cold encode
+            # shows measurably fewer growth rehashes (the instrumented
+            # half of the gate is RateC.rehash_count; the timing half is
+            # the bench). Internally this is the same core_reserve the
+            # stream head and batch pool already call.
+            self._eng.reserve(int(reserve))
         if warm_state is not None:
             state = warm_state
             if isinstance(state, str):
@@ -538,6 +574,14 @@ class RateC:
     def from_state(cls, state, **kw) -> "RateC":
         return cls(warm_state=state, **kw)
 
+    def rehash_count(self) -> int:
+        """Context-map growth rehashes since engine birth (tmap + cmap;
+        runtime stat, not serialized). The instrumented counter behind
+        the public reserve= gate (PLAN_v0.9 P1.5): a sized cold encode
+        must show measurably fewer rehashes, and the count is the
+        honest half of that gate (the timing half is the bench)."""
+        return int(self._eng.rehash_count())
+
     def reset(self) -> None:
         self._eng.reset()
 
@@ -610,9 +654,12 @@ def _maybe_decompress(raw: bytes) -> bytes:
         try:
             return zlib.decompress(raw[4:])
         except zlib.error as e:
-            # a corrupt RCZ1 container must surface as RatecError, not an
-            # unrelated zlib.error leaking out of load_state (v0.6.0)
-            raise RatecError(f"corrupt ratec state container: {e}") from None
+            # a corrupt RCZ1 container must surface as a coded RatecError,
+            # not an unrelated zlib.error leaking out of load_state (v0.6.0;
+            # coded in v0.9.1)
+            err = RatecError(f"corrupt ratec state container: {e}")
+            err.code = "SNAPSHOT_INVALID"
+            raise err from None
     return raw
 
 
@@ -757,23 +804,31 @@ def solve_c_for_book(data, target_book: int, lo: float = 1.0,
 
 
 def batch_spans(docs: Sequence, c: float = 20, threads: int = 0,
-                fast: bool = False, carry: bool = False):
+                fast: bool = False, carry: bool = False,
+                reserve: int | None = None):
     """Parallel rate-patching of independent byte documents.
 
     Returns a list of (starts ndarray uint32, n_bytes); patch k spans
     [starts[k], starts[k+1]), the last ends at n_bytes. Docs are encoded
     cold-start and independently — identical results to `RateC(
     store_book=False)` per doc, across all cores. `fast=True` uses the
-    non-exact fast lane (see RateC(exact=False)).
+    non-exact fast lane (see RateC(exact=False)). `reserve=n` pre-sizes
+    the shared pool's context maps for an n-byte doc before the first
+    encode (v0.9.1 public reserve=: reset() keeps grown capacity, so
+    one reserve serves the whole batch; see RateC(reserve=) and
+    `Engine.rehash_count` for the instrumented gate).
     """
     raws = _rc.batch([bytes(d) for d in docs], c=float(c), threads=threads,
-                     fast=bool(fast), carry=bool(carry))
+                     fast=bool(fast), carry=bool(carry),
+                     **({"reserve": int(reserve)} if reserve is not None
+                        else {}))
     return [(np.frombuffer(raw, dtype=np.uint32), len(d))
             for raw, d in zip(raws, docs)]
 
 
 def batch_encode(docs: Sequence, c: float = 20, threads: int = 0,
-                 fast: bool = False, carry: bool = False):
+                 fast: bool = False, carry: bool = False,
+                 reserve: int | None = None):
     """Thread-parallel LM-prep tokenization of independent byte documents.
 
     Returns a list of (ids ndarray int32, lens ndarray int32) per doc:
@@ -785,10 +840,15 @@ def batch_encode(docs: Sequence, c: float = 20, threads: int = 0,
     per doc, with all cores working in parallel (the GIL is released).
     For one long stream prefer a single `RateC` engine (its judge stays
     warm across the whole stream); for many small/medium docs this is
-    the fastest path to training-ready tokens.
+    the fastest path to training-ready tokens. `reserve=n` pre-sizes
+    the shared pool's context maps for an n-byte doc (v0.9.1 public
+    reserve= — fewer growth rehashes on cold pools; see
+    `RateC.rehash_count`).
     """
     raws = _rc.batch([bytes(d) for d in docs], c=float(c), threads=threads,
-                     fast=bool(fast), carry=bool(carry), ids=True)
+                     fast=bool(fast), carry=bool(carry), ids=True,
+                     **({"reserve": int(reserve)} if reserve is not None
+                        else {}))
     out = []
     for starts_b, ends_b, ids_b in raws:
         starts = np.frombuffer(starts_b, dtype=np.uint32)
@@ -800,6 +860,162 @@ def batch_encode(docs: Sequence, c: float = 20, threads: int = 0,
 
 
 __version__ = _rc.version()
+
+
+# ------------------------------------------------------- scale + ecosystem
+def chunked_prep(chunks, c: float = 20, engine_bytes: int = 1 << 32,
+                 threads: int = 2, ids: bool = True, exact: bool = True,
+                 carry: bool = False, reserve: int | None = None,
+                 sink=None):
+    """Prep an arbitrarily long stream within the uint32 span space.
+
+    Span offsets are uint32 — ONE engine covers at most 4 GiB of
+    lifetime stream (the documented BUFFER_LIMIT). `chunked_prep` turns
+    that limit from folklore into a tested helper: it consumes `chunks`
+    (bytes, or an iterable of byte chunks — the streaming shape keeps
+    RSS flat on corpora bigger than RAM), splits the stream into
+    segments of at most `engine_bytes` bytes, and encodes each segment
+    on a FRESH engine (a fresh judge + book per segment — exactly the
+    per-chunk-engines pattern the scale record documents, now with the
+    bookkeeping handled).
+
+    Per segment the result is identical to encoding that segment's
+    bytes on a standalone engine: ids bit-exact, spans tiling the
+    segment exactly (the PLAN_v0.9 P2.1 gate asserts sha256 equality
+    against explicit per-segment engines on an 8 GiB synthetic stream —
+    bench/gate_8gib.py). Segment results carry `seg_bytes` so offsets
+    can be re-based into a u64 global space downstream; the arrays
+    themselves stay uint32 per segment.
+
+    Parameters
+    ----------
+    chunks : bytes | bytearray | iterable of bytes-like
+        The stream. An iterable is consumed lazily; a chunk may exceed
+        `engine_bytes` (it is split at segment boundaries).
+    engine_bytes : int
+        Per-engine span budget, <= the 4 GiB hard limit. Operators
+        choose it from RAM: a segment's ids+spans arrays are held only
+        for the duration of that segment (and only when `sink` is None
+        are they all retained).
+    ids : bool
+        Produce the LM-prep token stream per segment (ids + lens)
+        alongside spans.
+    sink : callable | None
+        Called as `sink(result_dict)` per segment as soon as it is
+        encoded; when given, results are NOT retained (the flat-RSS
+        shape for multi-GiB jobs). Each result dict:
+        ``{"seg_index", "seg_bytes", "starts", "ends", "ids", "lens"}``
+        (ids/lens None when ids=False).
+
+    Returns
+    -------
+    list of result dicts (empty-safe to ignore when sink is used).
+    """
+    if engine_bytes < 1 or engine_bytes > (1 << 32):
+        raise ValueError("engine_bytes must be 1 .. 2**32 (the uint32 "
+                         "span space)")
+    if isinstance(chunks, (bytes, bytearray, memoryview)):
+        chunks = [bytes(chunks)]
+    out = [] if sink is None else None
+    seg = bytearray()
+    seg_index = 0
+
+    def finish():
+        nonlocal seg_index, seg
+        data = bytes(seg)
+        seg.clear()
+        # ids=True needs a stored book (the intern pass interns into it),
+        # so segment engines are always book mode — discarded per segment.
+        # ONE encode_stream_parallel call per segment: a second call would
+        # run on a warmed judge + book (a continued engine), which is NOT
+        # the per-fresh-engine pattern this helper documents.
+        eng = RateC(c=c, store_book=True, exact=exact, carry=carry, pf=2)
+        if ids:
+            starts_a, ends_a, tok = eng.encode_stream_parallel(
+                data, threads=threads, ids=True)
+            res = {"seg_index": seg_index, "seg_bytes": len(data),
+                   "starts": np.asarray(starts_a, dtype=np.uint32),
+                   "ends": np.asarray(ends_a, dtype=np.uint32),
+                   "ids": np.asarray(tok, dtype=np.int32),
+                   "lens": (np.asarray(ends_a, dtype=np.uint32) -
+                            np.asarray(starts_a, dtype=np.uint32)
+                            ).astype(np.int32)}
+        else:
+            starts_a, ends_a = eng.encode_stream_parallel(
+                data, threads=threads, as_arrays=True)
+            res = {"seg_index": seg_index, "seg_bytes": len(data),
+                   "starts": np.asarray(starts_a, dtype=np.uint32),
+                   "ends": np.asarray(ends_a, dtype=np.uint32),
+                   "ids": None, "lens": None}
+        seg_index += 1
+        if sink is not None:
+            sink(res)
+        else:
+            out.append(res)
+        del eng
+
+    for chunk in chunks:
+        chunk = bytes(chunk)
+        view = memoryview(chunk)
+        while len(view):
+            take = min(len(view), engine_bytes - len(seg))
+            seg += view[:take]
+            view = view[take:]
+            if len(seg) >= engine_bytes:
+                finish()
+    if seg:
+        finish()
+    return out if sink is None else []
+
+
+def export_tokenizer_json(engine, path=None, pretty: bool = True):
+    """Export a trained engine's book as an HF `tokenizer.json` vocab.
+
+    The bridge that lets a frozen ratec snapshot load into
+    HF `transformers` (PLAN_v0.9 P3.1): the book's (id -> token bytes)
+    mapping becomes a WordLevel vocab. Token bytes are mapped to JSON
+    strings one-to-one via latin-1 (every byte is a valid latin-1
+    codepoint, so the mapping is invertible and byte-exact — the
+    round-trip gate in tests/test_v091.py reconstructs the book bytes
+    from the JSON alone). Consumers that tokenize WITH this vocab must
+    use ratec's segmentation (the vocab is the book's content table,
+    not a whitespace splitter); the documented contract is: for every
+    id the engine produces, `vocab[latin1(book_bytes[id])] == id`, and
+    decoding a ratec ids stream through that inverse yields
+    `engine.decode_bytes(ids)` exactly.
+
+    `engine` needs store_book=True (BOOKLESS otherwise, like decode).
+    Returns the JSON string; writes to `path` when given.
+    """
+    dump = (engine.book_dump() if hasattr(engine, "book_dump")
+            else engine._eng.book_dump())   # ordered token bytes, index == id
+    vocab = {}
+    for tid, content in enumerate(dump):
+        vocab[content.decode("latin-1")] = tid
+    if len(vocab) != len(dump):
+        raise RatecError("book contains duplicate token strings; "
+                         "vocab would collide")
+    doc = {
+        "version": "1.0",
+        "truncation": None,
+        "normalizer": None,
+        "pre_tokenizer": None,
+        "post_processor": None,
+        "decoder": None,
+        "added_tokens": [],
+        "model": {
+            "type": "WordLevel",
+            "vocab": vocab,
+            "unk_token": "<unk>",
+        },
+    }
+    import json as _json
+    s = _json.dumps(doc, ensure_ascii=False,
+                    indent=2 if pretty else None)
+    if path is not None:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(s)
+    return s
 
 
 # ------------------------------------------------------------------ bench

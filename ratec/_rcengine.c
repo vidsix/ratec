@@ -34,6 +34,7 @@
 #include <Python.h>
 #endif
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -91,6 +92,10 @@ typedef struct {
     void *e; uint64_t capbits, mask, n; uint32_t esize;
     uint64_t *dirty;             /* page-granular touched bitmap (reset)  */
     int page_shift;              /* log2(slots per 4 KiB page)            */
+    uint64_t n_rehash;           /* growth rehashes since engine birth —
+                                    runtime stat, NOT serialized; the
+                                    public reserve= gate reads it
+                                    (Engine.rehash_count, v0.9.1) */
 } Map;
 
 static int map_alloc(Map *m, uint64_t capbits, uint32_t esize) {
@@ -98,6 +103,7 @@ static int map_alloc(Map *m, uint64_t capbits, uint32_t esize) {
     if (capbits > 26) capbits = 26;
     m->capbits = capbits; m->mask = (1ull << capbits) - 1; m->n = 0;
     m->esize = esize;
+    m->n_rehash = 0;
     int ps = 0;                   /* log2(slots per 4 KiB page) */
     while ((1u << ps) < 4096u / esize) ps++;
     m->page_shift = ps;
@@ -132,6 +138,7 @@ static inline void *fos(Map *m, uint64_t key) {
 static int map_rehash_to(Map *m, uint64_t capbits) {
     if (capbits <= m->capbits) return 0;
     if (capbits > 26) capbits = 26;
+    m->n_rehash++;
     Map t;
     if (map_alloc(&t, capbits, m->esize) < 0) return -1;
     uint64_t cap = 1ull << m->capbits;
@@ -363,20 +370,122 @@ static int gb_put(GrowBuf *g, const void *src, size_t len) {
     memcpy(g->p + g->n, src, len); g->n += len; return 0;
 }
 #define gb_u8(g, v)   gb_put((g), (v), 1)
-#define gb_u32(g, v)  gb_put((g), (v), 4)
-#define gb_u64(g, v)  gb_put((g), (v), 8)
-#define gb_f64(g, v)  gb_put((g), (v), 8)
 
-typedef struct { const uint8_t *p; size_t n, at; int err; } RdBuf;
+/* ---- explicit little-endian primitives (snapshot v8) ----
+ * Byte order is part of the FORMAT, not of the host: v8 serializes and
+ * parses identically on any architecture. v2..v7 keep their historical
+ * native-endian layout (documented: those files only round-trip between
+ * same-endian hosts). See tests/test_be_sim.py: RATEC_SIMULATE_BIG_ENDIAN
+ * swaps the NATIVE scalar reads so a plain x86 build executes the
+ * big-endian-host behavior — native-format (v2..v7) files stop loading,
+ * explicit-LE (v8) files are byte-identical and load fine. */
+static void put_le16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+}
+static void put_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void put_le64(uint8_t *p, uint64_t v) {
+    for (int i = 0; i < 8; i++) p[i] = (uint8_t)(v >> (8 * i));
+}
+static void put_lef64(uint8_t *p, double d) {
+    uint64_t t; memcpy(&t, &d, 8); put_le64(p, t);
+}
+static int gb_le16(GrowBuf *g, uint16_t v) {
+    uint8_t b[2]; put_le16(b, v); return gb_put(g, b, 2);
+}
+static int gb_le32(GrowBuf *g, uint32_t v) {
+    uint8_t b[4]; put_le32(b, v); return gb_put(g, b, 4);
+}
+static int gb_le64(GrowBuf *g, uint64_t v) {
+    uint8_t b[8]; put_le64(b, v); return gb_put(g, b, 8);
+}
+static int gb_lef64(GrowBuf *g, double v) {
+    uint8_t b[8]; put_lef64(b, v); return gb_put(g, b, 8);
+}
+
+typedef struct { const uint8_t *p; size_t n, at; int err; int le; } RdBuf;
 static int rd_get(RdBuf *r, void *dst, size_t len) {
     if (r->err || r->at + len > r->n) { r->err = 1; return -1; }
     memcpy(dst, r->p + r->at, len); r->at += len; return 0;
 }
+static uint16_t get_le16(const uint8_t *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+static uint32_t get_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static uint64_t get_le64(const uint8_t *p) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | p[i];
+    return v;
+}
+static double get_lef64(const uint8_t *p) {
+    uint64_t t = get_le64(p); double d; memcpy(&d, &t, 8); return d;
+}
+/* native-order scalar reads (the v2..v7 historical semantics); under
+ * RATEC_SIMULATE_BIG_ENDIAN they byte-swap, modeling a big-endian host */
+static int rd_native16(RdBuf *r, uint16_t *v) {
+    if (rd_get(r, v, 2)) return -1;
+#ifdef RATEC_SIMULATE_BIG_ENDIAN
+    *v = (uint16_t)(((uint16_t)(*v & 0xFFu) << 8) | (uint16_t)(*v >> 8));
+#endif
+    return 0;
+}
+static int rd_native32(RdBuf *r, uint32_t *v) {
+    if (rd_get(r, v, 4)) return -1;
+#ifdef RATEC_SIMULATE_BIG_ENDIAN
+    { uint32_t x = *v;
+      x = ((x & 0xFFu) << 24) | ((x & 0xFF00u) << 8) |
+          ((x >> 8) & 0xFF00u) | ((x >> 24) & 0xFFu);
+      *v = x; }
+#endif
+    return 0;
+}
+static int rd_native64(RdBuf *r, uint64_t *v) {
+    if (rd_get(r, v, 8)) return -1;
+#ifdef RATEC_SIMULATE_BIG_ENDIAN
+    { uint64_t x = *v, t = 0;
+      for (int i = 0; i < 8; i++) t = (t << 8) | ((x >> (8 * i)) & 0xFFu);
+      *v = t; }
+#endif
+    return 0;
+}
+static int rd_nativef64(RdBuf *r, double *v) {
+    uint64_t t;
+    if (rd_native64(r, &t)) return -1;
+    memcpy(v, &t, 8);
+    return 0;
+}
+/* version-aware scalar reads: v8 files (le=1) decode explicit LE on any
+ * host; v2..v7 (le=0) keep the native memcpy semantics */
+static int rdv_u16(RdBuf *r, uint16_t *v) {
+    if (!r->le) return rd_native16(r, v);
+    uint8_t b[2]; if (rd_get(r, b, 2)) return -1;
+    *v = get_le16(b); return 0;
+}
+static int rdv_u32(RdBuf *r, uint32_t *v) {
+    if (!r->le) return rd_native32(r, v);
+    uint8_t b[4]; if (rd_get(r, b, 4)) return -1;
+    *v = get_le32(b); return 0;
+}
+static int rdv_u64(RdBuf *r, uint64_t *v) {
+    if (!r->le) return rd_native64(r, v);
+    uint8_t b[8]; if (rd_get(r, b, 8)) return -1;
+    *v = get_le64(b); return 0;
+}
+static int rdv_f64(RdBuf *r, double *v) {
+    if (!r->le) return rd_nativef64(r, v);
+    uint8_t b[8]; if (rd_get(r, b, 8)) return -1;
+    *v = get_lef64(b); return 0;
+}
 #define rd_u8(r, v)   rd_get((r), (v), 1)
-#define rd_u16(r, v)  rd_get((r), (v), 2)
-#define rd_u32(r, v)  rd_get((r), (v), 4)
-#define rd_u64(r, v)  rd_get((r), (v), 8)
-#define rd_f64(r, v)  rd_get((r), (v), 8)
+#define rd_u16(r, v)  rdv_u16((r), (v))
+#define rd_u32(r, v)  rdv_u32((r), (v))
+#define rd_u64(r, v)  rdv_u64((r), (v))
+#define rd_f64(r, v)  rdv_f64((r), (v))
 
 /* ----------------------------------------------------------------- core */
 typedef struct {
@@ -1094,23 +1203,34 @@ static int patch_from_sur_carry_core(const float *sur, size_t n, double C,
  *           why the section rides on a version bump rather than trailing
  *           on v6. load reads v2..v7. */
 static int save_core(RcCore *e, GrowBuf *g) {
-    uint32_t magic = RCST_MAGIC;
-    uint32_t ver = e->prune_after ? 7 : 6;
+    /* snapshot v8 (PLAN_v0.9 P2.2): the v7 layout, explicitly
+     * little-endian, with the prune section's presence carried by a
+     * header flag instead of the version byte. Byte order is part of
+     * the format, not of the host — v8 bytes are identical on any
+     * architecture (tests/test_be_sim.py executes a big-endian-host
+     * simulation to lock that). v2..v7 readers reject v8 cleanly at
+     * their version check (SNAPSHOT_VERSION); this reader accepts
+     * v2..v8. Read-side back-compat, write-path move: v0.9.1 no
+     * longer writes native-endian files. */
+    uint32_t ver = 8;
     uint32_t sb = (uint32_t)e->store_book, pf = (uint32_t)e->pf;
     uint32_t fz = (uint32_t)e->fast;
-    uint32_t poisoned = 0;
+    uint32_t poisoned = 0;         /* a poisoned engine cannot snapshot */
     uint8_t pm8 = (uint8_t)e->pmode;
     uint8_t mcb = (uint8_t)e->map_capbits;
-    if (gb_u32(g, &magic) || gb_u32(g, &ver) || gb_f64(g, &e->C) ||
-        gb_u32(g, &sb) || gb_u32(g, &pf) || gb_u32(g, &fz) ||
-        gb_u32(g, &poisoned) ||
-        gb_u8(g, &pm8) || gb_u8(g, &mcb) || gb_f64(g, &e->carry)) return -1;
-    if (gb_u64(g, &e->nseen) || gb_u64(g, &e->n_forced) ||
-        gb_u64(g, &e->n_patches)) return -1;
+    uint8_t prune_flag = (uint8_t)(e->prune_after ? 1 : 0);
+    if (gb_le32(g, RCST_MAGIC) || gb_le32(g, ver) || gb_lef64(g, e->C) ||
+        gb_le32(g, sb) || gb_le32(g, pf) || gb_le32(g, fz) ||
+        gb_le32(g, poisoned) ||
+        gb_put(g, &pm8, 1) || gb_put(g, &mcb, 1) || gb_lef64(g, e->carry) ||
+        gb_put(g, &prune_flag, 1)) return -1;
+    if (gb_le64(g, e->nseen) || gb_le64(g, e->n_forced) ||
+        gb_le64(g, e->n_patches)) return -1;
     /* patcher state */
     uint8_t po = (uint8_t)e->patch_open;
-    if (gb_u8(g, &po) || gb_u64(g, &e->open_start) || gb_u64(g, &e->open_len) ||
-        gb_f64(g, &e->cs) || gb_f64(g, &e->lim)) return -1;
+    if (gb_put(g, &po, 1) || gb_le64(g, e->open_start) ||
+        gb_le64(g, e->open_len) || gb_lef64(g, e->cs) || gb_lef64(g, e->lim))
+        return -1;
     if (e->store_book && e->patch_open && e->open_len &&
         gb_put(g, e->obuf, (size_t)e->open_len)) return -1;   /* obuf only in book mode */
     /* judge direct tables */
@@ -1124,71 +1244,98 @@ static int save_core(RcCore *e, GrowBuf *g) {
         const uint32_t *row = e->cnt2 + (c << 8);
         for (int k = 0; k < 256; k++) if (row[k]) { nctx++; break; }
     }
-    if (gb_u64(g, &nctx)) return -1;
+    if (gb_le64(g, nctx)) return -1;
     for (uint64_t c = 0; c < 65536; c++) {
         const uint32_t *row = e->cnt2 + (c << 8);
         int any = 0;
         for (int k = 0; k < 256; k++) if (row[k]) { any = 1; break; }
         if (!any) continue;
         uint16_t c16 = (uint16_t)c;
-        if (gb_put(g, &c16, 2)) return -1;
-        /* v6: u16 nonzero counter — the u8 counter wrapped at a full row
-         * (256 nonzero counts) and silently dropped it (P1-4) */
+        if (gb_le16(g, c16)) return -1;
+        /* v6+: u16 nonzero counter — the u8 counter wrapped at a full
+         * row (256 nonzero counts) and silently dropped it (P1-4) */
         uint8_t nz[256]; uint32_t vals[256]; int m = 0;
         for (int k = 0; k < 256; k++)
             if (row[k]) { nz[m] = (uint8_t)k; vals[m] = row[k]; m++; }
         uint16_t m16 = (uint16_t)m;
-        if (gb_put(g, &m16, 2) || gb_put(g, nz, (size_t)m) ||
-            gb_put(g, vals, (size_t)m * 4))
+        if (gb_le16(g, m16) || gb_put(g, nz, (size_t)m))
             return -1;
+        for (int k = 0; k < m; k++)
+            if (gb_le32(g, vals[k])) return -1;
     }
-    /* maps */
-    if (gb_u64(g, &e->tmap.capbits) || gb_u64(g, &e->tmap.n)) return -1;
+    /* maps — field-by-field LE (no struct slices: every multi-byte
+     * scalar crosses the format boundary explicitly) */
+    if (gb_le64(g, e->tmap.capbits) || gb_le64(g, e->tmap.n)) return -1;
     for (uint64_t s = 0; s < (1ull << e->tmap.capbits); s++) {
         const Ent *en = (const Ent *)((const uint8_t *)e->tmap.e + s * e->tmap.esize);
         if (!en->tot) continue;
-        if (gb_put(g, &en->key, 8) || gb_put(g, &en->tot, 4) ||
+        if (gb_le64(g, en->key) || gb_le32(g, en->tot) ||
             gb_put(g, &en->distinct, 1) ||
-            gb_put(g, en->b, WIN) || gb_put(g, en->c, WIN * 2)) return -1;
+            gb_put(g, en->b, WIN)) return -1;
+        for (int q = 0; q < WIN; q++)
+            if (gb_le16(g, en->c[q])) return -1;
     }
-    if (gb_u64(g, &e->cmap.capbits) || gb_u64(g, &e->cmap.n)) return -1;
+    if (gb_le64(g, e->cmap.capbits) || gb_le64(g, e->cmap.n)) return -1;
     for (uint64_t s = 0; s < (1ull << e->cmap.capbits); s++) {
         const CEnt *en = (const CEnt *)((const uint8_t *)e->cmap.e + s * e->cmap.esize);
         if (!en->tot) continue;
-        if (gb_put(g, &en->key, 8) || gb_put(g, &en->tot, 4)) return -1;
+        if (gb_le64(g, en->key) || gb_le32(g, en->tot)) return -1;
     }
     /* book */
     if (e->store_book) {
-        if (gb_u64(g, &e->book.n) || gb_u64(g, &e->book.alen)) return -1;
+        if (gb_le64(g, e->book.n) || gb_le64(g, e->book.alen)) return -1;
         if (e->book.alen && gb_put(g, e->book.arena, e->book.alen)) return -1;
         for (size_t id = 0; id < e->book.n; id++)
-            if (gb_put(g, &e->book.off[id], 4) || gb_put(g, &e->book.ln[id], 4))
+            if (gb_le32(g, e->book.off[id]) || gb_le32(g, e->book.ln[id]))
                 return -1;
     }
-    /* v7 prune section (prune-mode engines only) */
+    /* prune section (presence carried by the header flag, not the
+     * version byte — v8) */
     if (e->prune_after) {
-        if (gb_u64(g, &e->prune_after) || gb_u32(g, &e->prune_min) ||
-            gb_u64(g, &e->next_prune_at) || gb_u64(g, &e->n_pruned))
+        if (gb_le64(g, e->prune_after) || gb_le32(g, e->prune_min) ||
+            gb_le64(g, e->next_prune_at) || gb_le64(g, e->n_pruned))
             return -1;
         for (size_t id = 0; e->store_book && id < e->book.n; id++)
-            if (gb_put(g, &e->book.cnt[id], 4)) return -1;
+            if (gb_le32(g, e->book.cnt[id])) return -1;
     }
     return g->err ? -1 : 0;
 }
 
-static RcCore *load_core(const uint8_t *p, size_t n) {
-    RdBuf r = { p, n, 0, 0 };
+static RcCore *load_core(const uint8_t *p, size_t n, int *kind,
+                         uint32_t *badver) {
+    *kind = 0;
+    *badver = 0;
+    RdBuf r = { p, n, 0, 0, 1 };       /* le=1: magic+ver are LE always */
     uint32_t magic = 0, ver = 0, C32 = 0, sb = 0, pf = 0, fz = 0, poisoned = 0;
     double C = 20.0, carry = 0.0;
     uint8_t pmode = 0, mcb = (uint8_t)MAP_CAPBITS_DEFAULT;
+    uint8_t has_prune = 0;
     if (rd_u32(&r, &magic) || rd_u32(&r, &ver)) return NULL;
-    if (ver == 6 || ver == 7) {      /* v6: v5 + serialized map_capbits,
-                                      * u16 per-row nonzero counter;
-                                      * v7: v6 + trailing prune section */
+    if (magic != RCST_MAGIC) return NULL;              /* not ratec state */
+    if (ver < 2 || ver > 8) {                          /* unknown version */
+        *kind = 1;
+        *badver = ver;
+        return NULL;
+    }
+    r.le = (ver == 8);      /* v8: format byte order; v2..v7: native */
+    if (ver == 6 || ver == 7 || ver == 8) {
+                                 /* v6: v5 + serialized map_capbits,
+                                  * u16 per-row nonzero counter;
+                                  * v7: v6 + trailing prune section;
+                                  * v8: v7 layout explicit-LE, prune
+                                  * presence as a header flag */
         if (rd_f64(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
             rd_u32(&r, &fz) || rd_u32(&r, &poisoned) ||
             rd_u8(&r, &pmode) || rd_u8(&r, &mcb) || rd_f64(&r, &carry))
             return NULL;
+        if (ver == 8) {
+            uint8_t pflag = 0;
+            if (rd_u8(&r, &pflag)) return NULL;
+            if (pflag > 1) return NULL;
+            has_prune = pflag;
+        } else {
+            has_prune = (ver == 7);
+        }
     } else if (ver == 5) {           /* v5: fractional C + carry mode */
         if (rd_f64(&r, &C) || rd_u32(&r, &sb) || rd_u32(&r, &pf) ||
             rd_u32(&r, &fz) || rd_u32(&r, &poisoned) ||
@@ -1201,7 +1348,6 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
         if (ver >= 2 && rd_u32(&r, &poisoned)) return NULL;
         C = (double)C32;
     }
-    if (magic != RCST_MAGIC || ver < 2 || ver > 7) return NULL;
     /* header sanity (P1-6): reject absurd/NaN tuning and flag fields before
      * they can reach the engine (NaN already fails the range compares) */
     if (sb > 1 || pf > 4 || fz > 1 || poisoned > 1 || pmode > 1) return NULL;
@@ -1382,7 +1528,7 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
                 goto fail;
             e->book.off[id] = off; e->book.ln[id] = ln;
         }
-        if (e->book.cnt && ver < 7)
+        if (e->book.cnt && !has_prune)
             memset(e->book.cnt, 0, (size_t)bn * 4);   /* no count history */
         e->book.n = bn;
         /* rebuild hash table */
@@ -1395,8 +1541,9 @@ static RcCore *load_core(const uint8_t *p, size_t n) {
             e->book.slot[j].h = h_;
         }
     }
-    /* v7 prune section (prune-mode engines only) */
-    if (ver == 7) {
+    /* prune section: v7 rides on the version byte; v8 carries the
+     * presence in the header flag (same body, LE-decoded in v8) */
+    if (ver == 7 || (ver == 8 && has_prune)) {
         uint64_t pa = 0, npa = 0, npr = 0;
         uint32_t pmin = 0;
         if (rd_u64(&r, &pa) || rd_u32(&r, &pmin) ||
@@ -1432,17 +1579,73 @@ typedef struct {
 
 static PyObject *RatecError;
 
+/* The error taxonomy (PLAN_v0.9 P2.3): every RatecError carries a .code
+ * from the fixed set below — prep pipelines branch on codes, never on
+ * message strings. Codes (RatecErrorCode in api.py mirrors this list):
+ *   TILING           span arrays must partition the stream exactly
+ *   BOOKLESS         the operation needs a stored book (store_book=True)
+ *   CAP_EXHAUSTED    context maps hit their cap (raise map_capbits / chunk)
+ *   BUFFER_LIMIT     hard buffer limit hit (the 4 GiB uint32 span space)
+ *   SNAPSHOT_INVALID a saved state blob / restore transfer is corrupt,
+ *                    truncated or incompatible
+ *   SNAPSHOT_VERSION the saved state's FORMAT VERSION is not understood
+ *   ARGUMENT         caller-side contract violation (bad args, misuse,
+ *                    ids foreign to this book)
+ *   STATE            the ENGINE cannot serve the call: poisoned after an
+ *                    internal failure, busy in another thread, internal
+ *                    allocation failure
+ * tests/test_errors.py asserts each code at each reachable raise site
+ * via the public API and audits the source-level mapping; the fuzz
+ * gates assert codes, not strings. */
+static void ratec_err_code(const char *code, PyObject *msg) {
+    PyObject *exc = PyObject_CallOneArg(RatecError, msg);
+    if (!exc) {
+        PyErr_SetObject(RatecError, msg);
+        Py_DECREF(msg);
+        return;
+    }
+    PyObject *c = PyUnicode_InternFromString(code);
+    if (!c || PyObject_SetAttrString(exc, "code", c) < 0) {
+        Py_XDECREF(c);
+        Py_DECREF(exc);
+        PyErr_SetObject(RatecError, msg);
+        Py_DECREF(msg);
+        return;
+    }
+    Py_DECREF(c);
+    PyErr_SetObject(RatecError, exc);
+    Py_DECREF(exc);
+    Py_DECREF(msg);
+}
+
+/* coded raise, static message */
+static void ratec_err(const char *code, const char *msg) {
+    PyObject *m = PyUnicode_FromString(msg);
+    if (!m) return;
+    ratec_err_code(code, m);
+}
+
+/* coded raise, PyErr_Format-style formatting */
+static void ratec_errf(const char *code, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    PyObject *m = PyUnicode_FromFormatV(fmt, ap);
+    va_end(ap);
+    if (!m) return;
+    ratec_err_code(code, m);
+}
+
 static int Eng_busy(EngineObj *self) {
     if (self->busy) {
-        PyErr_SetString(RatecError,
-                        "engine already running in another thread; "
-                        "RateC engines are not thread-safe (use ratec.batch)");
+        ratec_err("ARGUMENT",
+                  "engine already running in another thread; "
+                  "RateC engines are not thread-safe (use ratec.batch)");
         return 0;
     }
     if (self->core->poisoned) {
-        PyErr_SetString(RatecError,
-                        "engine state is invalid after a MemoryError; "
-                        "create a new engine");
+        ratec_err("STATE",
+                  "engine state is invalid after a MemoryError; "
+                  "create a new engine");
         return 0;
     }
     return 1;
@@ -1546,9 +1749,8 @@ static PyObject *Engine_feedflush(EngineObj *self, PyObject *arg, int do_flush) 
     if (rc == 0) out = build_patch_list(s, e2, ids);
     else if (rc == -1) PyErr_NoMemory();
     else if (rc == -3)
-        PyErr_SetString(RatecError, "context map exhausted; raise "
-                        "map_capbits or encode in chunks");
-    else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+        ratec_err("CAP_EXHAUSTED", "context map exhausted; raise map_capbits or encode in chunks");
+    else ratec_err("BUFFER_LIMIT", "stream exceeds 4 GiB span limit");
     /* A failed feed leaves the engine unusable: the pipelined judge may
      * have advanced past the failing byte. reset() recovers. The -3 map
      * exhaustion is the exception: it aborts BETWEEN bytes (the growth
@@ -1608,9 +1810,8 @@ static PyObject *Engine_feedflush_raw(EngineObj *self, PyObject *arg,
     if (rc == 0) out = build_span_arrays(s, e2);
     else if (rc == -1) PyErr_NoMemory();
     else if (rc == -3)
-        PyErr_SetString(RatecError, "context map exhausted; raise "
-                        "map_capbits or encode in chunks");
-    else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+        ratec_err("CAP_EXHAUSTED", "context map exhausted; raise map_capbits or encode in chunks");
+    else ratec_err("BUFFER_LIMIT", "stream exceeds 4 GiB span limit");
     if (rc == -1 || rc == -2) self->core->poisoned = 1;
     return out;
 }
@@ -1634,7 +1835,7 @@ static PyObject *Engine_flush_raw(EngineObj *self, PyObject *Py_UNUSED(ig)) {
     PyObject *out = NULL;
     if (rc == 0) out = build_span_arrays(s, e2);
     else if (rc == -1) PyErr_NoMemory();
-    else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+    else ratec_err("BUFFER_LIMIT", "stream exceeds 4 GiB span limit");
     if (rc < 0) self->core->poisoned = 1;
     return out;
 }
@@ -1777,9 +1978,7 @@ static PyObject *decode_batch_impl(EngineObj *self, PyObject *args,
         size_t at = 0;
         for (size_t i = 0; i < j->n; i++)
             if (j->ids[i] >= bn) { bad_id = j->ids[i]; at = i; break; }
-        PyErr_Format(RatecError,
-                     "unknown patch id %u in sequence %d at index %zu "
-                     "(book has %u entries)", bad_id, bad_job, at, bn);
+        ratec_errf("ARGUMENT", "unknown patch id %u in sequence %d at index %zu (book has %u entries)", bad_id, bad_job, at, bn);
         for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
         free(views); free(jobs); Py_DECREF(fast);
         return NULL;
@@ -1820,8 +2019,7 @@ static PyObject *Engine_decode_batch(EngineObj *self, PyObject *args,
      * engine's re-entrance flag for the whole batch */
     if (!Eng_busy(self)) return NULL;
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError,
-                        "decode_batch requires store_book=True");
+        ratec_err("BOOKLESS", "decode_batch requires store_book=True");
         return NULL;
     }
     self->busy = 1;
@@ -1843,8 +2041,7 @@ static PyObject *Engine_decode_batch(EngineObj *self, PyObject *args,
 static PyObject *Engine_intern_spans(EngineObj *self, PyObject *args) {
     if (!Eng_busy(self)) return NULL;
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError,
-                        "intern_spans requires store_book=True");
+        ratec_err("BOOKLESS", "intern_spans requires store_book=True");
         return NULL;
     }
     Py_buffer vd, vs, ve;
@@ -1864,17 +2061,15 @@ static PyObject *Engine_intern_spans(EngineObj *self, PyObject *args) {
     const uint32_t *en = (const uint32_t *)ve.buf;
     /* tiling validation: spans must partition [0, dlen) */
     if (m > 0 && (st[0] != 0 || en[m - 1] != dlen)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "spans must tile the stream exactly "
-                        "(start 0, end == len)");
+        ratec_err("TILING", "spans must tile the stream exactly (start 0, end == len)");
         goto done;
     }
     for (size_t k = 0; k < m; k++) {
         if (en[k] <= st[k] || en[k] > dlen ||
             (k + 1 < m && en[k] != st[k + 1])) {
-            PyErr_Format(PyExc_ValueError,
-                         "span %zu does not tile the stream "
-                         "(start %u, end %u)", k, st[k], en[k]);
+            ratec_errf("TILING",
+                       "span %zu does not tile the stream "
+                       "(start %u, end %u)", k, st[k], en[k]);
             goto done;
         }
     }
@@ -1901,7 +2096,7 @@ static PyObject *Engine_intern_spans(EngineObj *self, PyObject *args) {
     Py_END_ALLOW_THREADS
     if (failed) {
         Py_CLEAR(out);
-        PyErr_SetString(RatecError, "book interning failed (allocation)");
+        ratec_err("STATE", "book interning failed (allocation)");
     }
 done:
     PyBuffer_Release(&vd);
@@ -2060,8 +2255,7 @@ static PyObject *Engine_intern_spans_parallel(EngineObj *self,
                                               PyObject *args) {
     if (!Eng_busy(self)) return NULL;
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError,
-                        "intern_spans_parallel requires store_book=True");
+        ratec_err("BOOKLESS", "intern_spans_parallel requires store_book=True");
         return NULL;
     }
     Py_buffer vd, vs, ve;
@@ -2085,17 +2279,15 @@ static PyObject *Engine_intern_spans_parallel(EngineObj *self,
     /* tiling validation: spans must partition [0, dlen) — identical to
      * the sequential pass (the ids are only as good as their tiling) */
     if (m > 0 && (st[0] != 0 || en[m - 1] != dlen)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "spans must tile the stream exactly "
-                        "(start 0, end == len)");
+        ratec_err("TILING", "spans must tile the stream exactly (start 0, end == len)");
         goto done;
     }
     for (size_t k = 0; k < m; k++) {
         if (en[k] <= st[k] || en[k] > dlen ||
             (k + 1 < m && en[k] != st[k + 1])) {
-            PyErr_Format(PyExc_ValueError,
-                         "span %zu does not tile the stream "
-                         "(start %u, end %u)", k, st[k], en[k]);
+            ratec_errf("TILING",
+                       "span %zu does not tile the stream "
+                       "(start %u, end %u)", k, st[k], en[k]);
             goto done;
         }
     }
@@ -2120,8 +2312,7 @@ static PyObject *Engine_intern_spans_parallel(EngineObj *self,
         Py_END_ALLOW_THREADS
         if (failed) {
             Py_CLEAR(out);
-            PyErr_SetString(RatecError,
-                            "book interning failed (allocation)");
+            ratec_err("STATE", "book interning failed (allocation)");
         }
         goto done;
     }
@@ -2185,7 +2376,7 @@ static PyObject *Engine_intern_spans_parallel(EngineObj *self,
     Py_END_ALLOW_THREADS
     if (jobs[0].failed) {
         Py_CLEAR(out);
-        PyErr_SetString(RatecError, "book interning failed (allocation)");
+        ratec_err("STATE", "book interning failed (allocation)");
     }
 done:
     if (jobs) {
@@ -2217,7 +2408,7 @@ static PyObject *Engine_flush(EngineObj *self, PyObject *Py_UNUSED(ignored)) {
     PyObject *out = NULL;
     if (rc == 0) out = build_patch_list(s, e2, ids);
     else if (rc == -1) PyErr_NoMemory();
-    else PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+    else ratec_err("BUFFER_LIMIT", "stream exceeds 4 GiB span limit");
     if (rc < 0) self->core->poisoned = 1;
     return out;
 }
@@ -2250,8 +2441,7 @@ static PyObject *Engine_surprise(EngineObj *self, PyObject *arg) {
     } else if (rc == -3) {
         /* recoverable: map exhaustion leaves valid state (matches
          * encode_bytes) — a MemoryError + poison here was wrong */
-        PyErr_SetString(RatecError, "context map exhausted; raise "
-                        "map_capbits or encode in chunks");
+        ratec_err("CAP_EXHAUSTED", "context map exhausted; raise map_capbits or encode in chunks");
     } else { self->core->poisoned = 1; PyErr_NoMemory(); }
     free(sur);
     return out;
@@ -2260,8 +2450,7 @@ static PyObject *Engine_encode_bytes(EngineObj *self, PyObject *arg) {
     /* low-latency path: runs the engine with the id vector only (no span
      * tuples are built, no (start,end,id) list is materialized) */
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError,
-                        "encode_bytes requires store_book=True");
+        ratec_err("BOOKLESS", "encode_bytes requires store_book=True");
         return NULL;
     }
     Py_buffer view;
@@ -2287,13 +2476,12 @@ static PyObject *Engine_encode_bytes(EngineObj *self, PyObject *arg) {
         /* -1/-2 poison (mid-byte abort possible); -3 aborts between bytes
          * and leaves a valid streaming prefix — see Engine_feedflush */
         if (rc == -3) {
-            PyErr_SetString(RatecError, "context map exhausted; raise "
-                            "map_capbits or encode in chunks");
+            ratec_err("CAP_EXHAUSTED", "context map exhausted; raise map_capbits or encode in chunks");
             return NULL;
         }
         self->core->poisoned = 1;
         if (rc == -1) return PyErr_NoMemory();
-        PyErr_SetString(RatecError, "stream exceeds 4 GiB span limit");
+        ratec_err("BUFFER_LIMIT", "stream exceeds 4 GiB span limit");
         return NULL;
     }
     PyObject *out = PyList_New((Py_ssize_t)ids->n);
@@ -2318,7 +2506,7 @@ static PyObject *Engine_reset(EngineObj *self, PyObject *Py_UNUSED(ig)) {
 static PyObject *Engine_save_state(EngineObj *self, PyObject *Py_UNUSED(ig)) {
     if (!Eng_busy(self)) return NULL;
     if (self->core->poisoned) {
-        PyErr_SetString(RatecError, "cannot snapshot a poisoned engine");
+        ratec_err("STATE", "cannot snapshot a poisoned engine");
         return NULL;
     }
     self->busy = 1;
@@ -2340,8 +2528,7 @@ static PyObject *Engine_save_state(EngineObj *self, PyObject *Py_UNUSED(ig)) {
 static PyObject *Engine_clone(EngineObj *self, PyObject *Py_UNUSED(ig)) {
     if (!Eng_busy(self)) return NULL;
     if (self->core->store_book) {
-        PyErr_SetString(RatecError,
-                        "clone requires store_book=False (stream/worker use)");
+        ratec_err("ARGUMENT", "clone requires store_book=False (stream/worker use)");
         return NULL;
     }
     RcCore *c = core_clone_from(self->core);
@@ -2355,12 +2542,12 @@ static PyObject *Engine_clone(EngineObj *self, PyObject *Py_UNUSED(ig)) {
 static PyObject *Engine_restore_from(EngineObj *self, PyObject *other) {
     if (!Eng_busy(self)) return NULL;
     if (!PyObject_TypeCheck(other, &Engine_Type)) {
-        PyErr_SetString(RatecError, "restore_from expects an Engine");
+        ratec_err("ARGUMENT", "restore_from expects an Engine");
         return NULL;
     }
     EngineObj *src = (EngineObj *)other;
     if (src->busy) {
-        PyErr_SetString(RatecError, "source engine is busy");
+        ratec_err("STATE", "source engine is busy");
         return NULL;
     }
     int rc;
@@ -2368,9 +2555,7 @@ static PyObject *Engine_restore_from(EngineObj *self, PyObject *other) {
     rc = core_restore(self->core, src->core);
     Py_END_ALLOW_THREADS
     if (rc < 0) {
-        PyErr_SetString(RatecError,
-                        "restore_from: incompatible engines (book state or "
-                        "map capacity differs)");
+        ratec_err("SNAPSHOT_INVALID", "restore_from: incompatible engines (book state or map capacity differs)");
         return NULL;
     }
     Py_RETURN_NONE;
@@ -2385,9 +2570,18 @@ static PyObject *Engine_reserve(EngineObj *self, PyObject *arg) {
     if (core_reserve(self->core, (size_t)n) < 0) return PyErr_NoMemory();
     Py_RETURN_NONE;
 }
+
+static PyObject *Engine_rehash_count(EngineObj *self, PyObject *unused) {
+    (void)unused;
+    /* the instrumented growth counter for the public reserve= gate
+     * (PLAN_v0.9 P1.5): context-map growth rehashes since engine birth;
+     * runtime stat, not serialized. tmap + cmap summed. */
+    return PyLong_FromUnsignedLongLong(self->core->tmap.n_rehash +
+                                       self->core->cmap.n_rehash);
+}
 static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError, "decode_bytes requires store_book=True");
+        ratec_err("BOOKLESS", "decode_bytes requires store_book=True");
         return NULL;
     }
     /* fast path: a uint32 buffer (numpy array / array('I') / bytes) is
@@ -2409,10 +2603,7 @@ static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
             const uint32_t v = ids[k];
             if (v >= bn) {
                 PyBuffer_Release(&view);
-                PyErr_Format(RatecError, "unknown patch id %u "
-                             "(book has %u entries; decode only works on the "
-                             "tokenizer instance (or same-state copy) that "
-                             "produced the ids)", v, bn);
+                ratec_errf("ARGUMENT", "unknown patch id %u (book has %u entries; decode only works on the tokenizer instance (or same-state copy) that produced the ids)", v, bn);
                 return NULL;
             }
             total += self->core->book.ln[v];
@@ -2459,11 +2650,7 @@ static PyObject *Engine_decode_bytes(EngineObj *self, PyObject *arg) {
         if (v == -1 && PyErr_Occurred()) { Py_DECREF(seq); return NULL; }
         if (v < 0 || (uint64_t)v >= self->core->book.n) {
             Py_DECREF(seq);
-            PyErr_Format(RatecError, "unknown patch id %ld "
-                         "(book has %llu entries; decode only works on the "
-                         "tokenizer instance (or same-state copy) that "
-                         "produced the ids)",
-                         v, (unsigned long long)self->core->book.n);
+            ratec_errf("ARGUMENT", "unknown patch id %ld (book has %llu entries; decode only works on the tokenizer instance (or same-state copy) that produced the ids)", v, (unsigned long long)self->core->book.n);
             return NULL;
         }
         total += self->core->book.ln[v];
@@ -2534,7 +2721,7 @@ static PyObject *gs_repr(EngineObj *self) {
  * snapshot wire format. */
 static PyObject *Engine_book_dump(EngineObj *self, PyObject *unused) {
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError, "book_dump requires store_book=True");
+        ratec_err("BOOKLESS", "book_dump requires store_book=True");
         return NULL;
     }
     Book *b = &self->core->book;
@@ -2554,7 +2741,7 @@ static PyObject *Engine_book_dump(EngineObj *self, PyObject *unused) {
  * (which patches survive a prune_min threshold) without serializing. */
 static PyObject *Engine_book_counts(EngineObj *self, PyObject *unused) {
     if (!self->core->store_book) {
-        PyErr_SetString(RatecError, "book_counts requires store_book=True");
+        ratec_err("BOOKLESS", "book_counts requires store_book=True");
         return NULL;
     }
     Book *b = &self->core->book;
@@ -2612,6 +2799,9 @@ static PyMethodDef Engine_methods[] = {
      "(bit-identical; union-of-touched-pages cost; bookless only)"},
     {"reserve", (PyCFunction)(void (*)(void))Engine_reserve, METH_O,
      "reserve(n) — pre-size the context maps for an n-byte run"},
+    {"rehash_count", (PyCFunction)Engine_rehash_count, METH_NOARGS,
+     "rehash_count() — context-map growth rehashes since engine birth "
+     "(the instrumented counter behind the public reserve= gate)"},
     {"book_dump",    (PyCFunction)Engine_book_dump,    METH_NOARGS,
      "book_dump() -> [bytes, ...] the vocabulary, index == id."},
     {NULL, NULL, 0, NULL}
@@ -2650,6 +2840,11 @@ typedef struct {
     uint32_t *out; size_t nout;          /* starts (always) */
     uint32_t *out_e, *out_i; size_t ne, ni;   /* ids mode only */
     double c; int prebits, err, fast, carry, want_ids;
+    size_t reserve;                  /* context-map pre-sizing (v0.9.1
+                                        public reserve=); applied once
+                                        at pool birth — reset() keeps
+                                        the grown capacity, so one
+                                        reserve serves the whole batch */
 } BJob;
 typedef struct { BJob *jobs; int njobs; atomic_int next; } BPool;
 
@@ -2676,6 +2871,8 @@ static void *bworker(void *argp) {    BPool *p = (BPool *)argp;
             pool = core_new(j->c, j->want_ids, PF_DEFAULT, j->prebits,
                             MAP_CAPBITS_DEFAULT, j->fast, j->carry, 0, 1);
             if (!pool) { j->err = 1; continue; }
+            if (j->reserve &&
+                core_reserve(pool, j->reserve) < 0) { j->err = 1; continue; }
         } else {
             core_reset_keep(pool);
         }
@@ -2706,12 +2903,17 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *docs;
     double c = 20.0;
     int threads = 0, fz = 0, carry = 0, ids = 0;
+    long long reserve = 0;
     static char *kwlist[] = {"docs", "c", "threads", "fast", "carry",
-                             "ids", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|diiii", kwlist,
+                             "ids", "reserve", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|diiiiL", kwlist,
                                      &docs, &c, &threads, &fz, &carry,
-                                     &ids))
+                                     &ids, &reserve))
         return NULL;
+    if (reserve < 0) {
+        PyErr_SetString(PyExc_ValueError, "reserve expects n >= 0");
+        return NULL;
+    }
     PyObject *fast = PySequence_Fast(docs, "docs must be a sequence");
     if (!fast) return NULL;
     Py_ssize_t nd = PySequence_Fast_GET_SIZE(fast);
@@ -2738,6 +2940,7 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
         jobs[k].fast = fz;
         jobs[k].carry = carry ? 1 : 0;
         jobs[k].want_ids = ids ? 1 : 0;
+        jobs[k].reserve = (size_t)reserve;
         size_t n = jobs[k].n;
         int bits = 12;
         while ((1ull << bits) < 6 * n && bits < 23) bits++;
@@ -2778,7 +2981,7 @@ static PyObject *rc_batch(PyObject *self, PyObject *args, PyObject *kwds) {
             for (Py_ssize_t q = 0; q < nd; q++) PyBuffer_Release(&views[q]);
             for (Py_ssize_t q = 0; q < nd; q++) batch_job_free(&jobs[q]);
             free(views); free(jobs); Py_DECREF(fast);
-            PyErr_SetString(RatecError, "batch job failed (OOM?)");
+            ratec_err("STATE", "batch job failed (OOM?)");
             return NULL;
         }
         PyObject *b = NULL;
@@ -2845,10 +3048,18 @@ static PyObject *rc_load_state(PyObject *self, PyObject *arg) {
     Py_buffer view;
     if (PyObject_GetBuffer(arg, &view, PyBUF_SIMPLE) < 0)
         return NULL;
-    RcCore *core = load_core((const uint8_t *)view.buf, (size_t)view.len);
+    int kind = 0;
+    uint32_t badver = 0;
+    RcCore *core = load_core((const uint8_t *)view.buf, (size_t)view.len,
+                             &kind, &badver);
     PyBuffer_Release(&view);
     if (!core) {
-        PyErr_SetString(RatecError, "invalid or truncated ratec state");
+        if (kind == 1)
+            ratec_errf("SNAPSHOT_VERSION",
+                       "snapshot format version %u not supported "
+                       "(this engine reads v2..v8)", badver);
+        else
+            ratec_err("SNAPSHOT_INVALID", "invalid or truncated ratec state");
         return NULL;
     }
     EngineObj *selfobj = (EngineObj *)Engine_Type.tp_alloc(&Engine_Type, 0);

@@ -96,23 +96,31 @@ def roundtrip_ok(raw):
 
 # ------------------------------------------------------------ v6 structure
 def parse_v6(raw, allow_v7_tail=False):
-    """Walk the v6 layout; return dict of section offsets (for mutants).
-    With allow_v7_tail, a ver=7 payload walks on through the trailing
-    prune section (v0.7.0) instead of asserting the end; v6 goldens still
-    assert end == len(raw)."""
+    """Walk the v6/v7/v8 layout; return dict of section offsets (for
+    mutants). Field SIZES are identical across versions, so one walk
+    serves all three; v8 (v0.9.1) shifts every post-carry offset by the
+    header flag byte and stores the same scalars little-endian (which is
+    what "<Q"/"<I" read anyway on the LE-written files). With
+    allow_v7_tail, a ver=7 payload — or a ver=8 payload with the prune
+    flag set — walks on through the trailing prune section instead of
+    asserting the end; v6 goldens still assert end == len(raw)."""
+    (fmt_ver,) = struct.unpack_from("<I", raw, 4)
+    v8 = fmt_ver == 8
+    shift = 1 if v8 else 0
     o = {"ver": 4, "off_C": 8}
     o["off_sb"], o["off_pf"], o["off_fz"], o["off_poisoned"] = 16, 20, 24, 28
     o["off_pmode"], o["off_mcb"] = 32, 33
     o["off_carry"] = 34
-    o["off_nseen"], o["off_nforced"], o["off_npatches"] = 42, 50, 58
-    o["off_patch_open"] = 66
-    o["off_open_start"], o["off_open_len"] = 67, 75
-    o["off_cs"], o["off_lim"] = 83, 91
-    at = 99
+    o["off_prune_flag"] = 42            # v8 only (harmless elsewhere)
+    o["off_nseen"], o["off_nforced"], o["off_npatches"] =         42 + shift, 50 + shift, 58 + shift
+    o["off_patch_open"] = 66 + shift
+    o["off_open_start"], o["off_open_len"] = 67 + shift, 75 + shift
+    o["off_cs"], o["off_lim"] = 83 + shift, 91 + shift
+    at = 99 + shift
     if raw[o["off_sb"]]:
         pass  # store_book flag; obuf presence decided below
     po = raw[o["off_patch_open"]]
-    olen = struct.unpack_from("<Q", raw, 75)[0]
+    olen = struct.unpack_from("<Q", raw, 75 + shift)[0]
     sb = raw[o["off_sb"]]
     if sb and po and olen:
         o["off_obuf"] = at
@@ -150,8 +158,7 @@ def parse_v6(raw, allow_v7_tail=False):
         at += alen
         o["off_book_off"] = at
         at += bn * 8                     # off/ln pairs (4+4 each)
-    (ver,) = struct.unpack_from("<I", raw, 4)
-    if allow_v7_tail and ver == 7:
+    if allow_v7_tail and (fmt_ver == 7 or (fmt_ver == 8 and raw[42] == 1)):
         # v0.7.0 prune section: pa u64, pmin u32, npa u64, npr u64,
         # cnt[bn] u32 each
         o["off_pa"] = at
@@ -430,18 +437,22 @@ def main():
           ok_fl, bad_fl)
 
     # ------------------------------------- 4b. v7 prune snapshots (v0.7.0)
-    print("4b. v7 prune-mode snapshot fuzz")
+    print("4b. v8 prune-mode snapshot fuzz")
     peng = ratec.RateC(c=20, prune=True, prune_after=4096, prune_min=2)
     peng.encode_to_spans(corpus[:60000])
     p_raw = peng.save_state()
     if p_raw[:4] == b"RCZ1":                    # api wrapper -> raw payload
         p_raw = zlib.decompress(p_raw[4:])
-    check("v7 header + save->load->save identity",
-          p_raw[4] == 7 and load_via_api(p_raw).save_state() == p_raw)
+    # v0.9.1: the write path is v8-only — the prune section rides on the
+    # header flag (offset 42), not the version byte
+    check("v8 header (prune flag set) + save->load->save identity",
+          int.from_bytes(p_raw[4:8], "little") == 8
+          and p_raw[42] == 1
+          and load_via_api(p_raw).save_state() == p_raw)
     pv = parse_v6(p_raw, allow_v7_tail=True)
     V7 = []  # (label, mutant, must_raise)
     V7 += [
-        ("ver = 8 (future)", put(p_raw, 4, struct.pack("<I", 8)), True),
+        ("ver = 9 (future)", put(p_raw, 4, struct.pack("<I", 9)), True),
         ("ver = 6 (claims v6, trailing bytes remain)",
          put(p_raw, 4, struct.pack("<I", 6)), True),
         ("prune_after = 0", put(p_raw, pv["off_pa"], struct.pack("<Q", 0)), True),
@@ -485,7 +496,7 @@ def main():
                 bad7.append((label, "loaded but round-trip drifted"))
             else:
                 n7c += 1
-    check(f"v7 targeted mutants: {len(V7) - len(bad7)}/{len(V7)} behave "
+    check(f"v8 prune mutants: {len(V7) - len(bad7)}/{len(V7)} behave "
           f"({n7r} rejected, {n7c} tolerated)",
           not bad7, "; ".join(f"{l}: {d}" for l, d in bad7[:4]) or "")
     ok7, n7f, r7, c7, bad7f = True, 0, 0, 0, ""
@@ -514,7 +525,7 @@ def main():
             break
         except RatecError:
             pass
-    check(f"v7 flips+truncations: {n7f} flips ({r7} rejected, {c7} clean) "
+    check(f"v8 flips+truncations: {n7f} flips ({r7} rejected, {c7} clean) "
           f"+ {n_tr7} truncations all rejected", ok7, bad7f)
 
     # ------------------------------------- 4b. v7 prune snapshots (v0.7.0)    print()

@@ -106,3 +106,57 @@ jobs:
         run: |
           python setup.py build_ext --inplace
           python tests/test_smollm2_port.py
+
+  lean:
+    # PLAN_v0.9 P2.5: the proof gate — every execution-model claim in the
+    # docs is a no-sorry LEAN theorem that compiles in CI. The pin in
+    # lean/lean-toolchain picks the toolchain; the active-sorry gate scans
+    # for sorry/admit OUTSIDE line comments (doc mentions are fine).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan (the repo pin drives the toolchain version)
+        run: |
+          curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Active-sorry gate (comments and doc mentions excluded)
+        run: |
+          python - <<'EOF'
+          import re, sys, pathlib
+          bad = []
+          for f in sorted(pathlib.Path("lean").glob("*.lean")):
+              for n, line in enumerate(f.read_text().splitlines(), 1):
+                  code = line.split("--")[0]        # strip line comments
+                  if re.search(r"\b(sorry|admit)\b", code):
+                      bad.append(f"{f}:{n}: {line.strip()}")
+          if bad:
+              print("ACTIVE SORRY FOUND:\n" + "\n".join(bad))
+              sys.exit(1)
+          print("active-sorry gate: clean (6 files)")
+          EOF
+      - name: Compile every proof file (no-sorry, v4.36.0 per the pin)
+        run: |
+          cd lean
+          for f in RateC.lean RatecSerial.lean RatecTiling.lean RatecIntern.lean RatecDecode.lean RatecSnapshot.lean; do
+            echo "== lean $f"
+            lean "$f"
+          done
+
+  aarch64:
+    # PLAN_v0.9 P2.5: the portability claim becomes a build artifact — the
+    # engine compiles and the exact-lane gates pass on arm64 (the same
+    # baseline-ISA C, no architecture-specific code paths).
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numpy + setuptools + pytest
+        run: pip install numpy setuptools pytest
+      - name: Build C extension in place
+        run: python setup.py build_ext --inplace
+      - name: Core gates (suite + bit-exactness + fuzz; snapfuzz included)
+        run: make test
+      - name: pytest wrapper
+        run: python -m pytest tests/ -q
