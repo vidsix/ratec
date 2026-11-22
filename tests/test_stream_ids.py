@@ -61,8 +61,11 @@ def test_intern_spans_rejects_bad_tiling():
     ids = np.asarray(r.encode_bytes(data[:5000]), dtype=np.uint32)
     starts = np.asarray([0, 100], dtype=np.uint32)
     ends = np.asarray([50, 5001], dtype=np.uint32)
-    with pytest.raises(ValueError):
+    # v0.9.1: tiling violations are CODED RatecError (TILING), not bare
+    # ValueError — pipelines branch on codes
+    with pytest.raises(ratec.RatecError) as ei:
         r._eng.intern_spans(data[:5001], starts.tobytes(), ends.tobytes())
+    assert ei.value.code == "TILING"
     del ids
 
 

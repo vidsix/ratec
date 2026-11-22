@@ -101,9 +101,11 @@ def test_parallel_intern_rejects_bad_tiling():
     r = ratec.RateC(c=20, store_book=True)
     starts = np.asarray([0, 100], dtype=np.uint32)
     ends = np.asarray([50, 5001], dtype=np.uint32)
-    with pytest.raises(ValueError):
+    # v0.9.1: coded TILING (moved from bare ValueError)
+    with pytest.raises(ratec.RatecError) as ei:
         r._eng.intern_spans_parallel(
             data[:5001], starts.tobytes(), ends.tobytes(), 4)
+    assert ei.value.code == "TILING"
 
 
 def test_parallel_intern_requires_book():
