@@ -128,24 +128,97 @@ def render_c_sweep(rec):
     return "\n".join(lines) + "\n"
 
 
+def render_quietbox(rec):
+    """The quiet-box envelope (PLAN_v0.9 P1.1): per-lane reference
+    numbers the 1.0 perf floors are ratios of, plus the P1.2 gate
+    ratios and the tiktoken reference judge."""
+    n = rec["bench_call"]["n_bytes"]
+    lanes = rec["lanes"]
+    NOTES = [
+        ("encode_bytes_warm", "`RateC.encode_bytes`",
+         "sequential judge+patcher; persistent engine, book persists "
+         "across reps (the `bench()` semantics)"),
+        ("spans_arrays", "`RateC.encode_to_spans`",
+         "tuple-free `as_arrays=True`; pool engine, `reset()` per rep"),
+        ("stream_spans_cold", "`encode_stream_parallel` (spans)",
+         "fresh engine per rep — the prep-pipeline cold shape"),
+        ("stream_ids_cold", "`…(ids=True)` cold",
+         "fresh engine per rep — includes the cold-book intern merge"),
+        ("stream_spans_warm", "`encode_stream_parallel` (spans, warm)",
+         "persistent engine, saturated book"),
+        ("stream_ids_warm", "`…(ids=True)` warm",
+         "saturated book — the intern pre-probe hits"),
+        ("decode_bytes", "`RateC.decode_bytes`",
+         "single-thread full-book read of the stream ids"),
+        ("decode_batch", "`RateC.decode_batch(threads=2)`",
+         "8-way id fan"),
+        ("batch_encode", "`ratec.batch_encode(threads=2)`",
+         "4 x 1 MiB docs, per-doc cold engines"),
+    ]
+    lines = [
+        "Envelope: min-of-%d-round medians, round-robin interleave, %s; "
+        "provenance (loadavg, governor probe, affinity, exactness "
+        "cross-checks) in the record. The 1.0 per-lane floors are RATIOS "
+        "of these numbers, so a re-issue on a better host lifts the "
+        "floors, never the ratios." % (
+            rec["record"]["runs"]["rounds"],
+            rec["record"]["created_utc"][:10]),
+        "",
+        "| lane (exact, %d MiB stream) | envelope MB/s | round medians |"
+        % (n >> 20),
+        "|---|---:|---|",
+    ]
+    for key, label, note in NOTES:
+        meds = lanes[key]["round_medians_s"]
+        med_mb = " ".join("%.2f" % (n / m / 1e6) for m in meds)
+        lines.append("| %s | %.2f | %s |" % (label, lanes[key]["mb_s"],
+                                             med_mb + " — " + note))
+    lines += ["", "| gate ratio (P1.2) | value | gate |", "|---|---:|---|"]
+    r = rec["ratios"]
+    lines.append("| ids/spans cold | %.1f%% | ≥ 95%%: %s |" % (
+        r["ids_cold_over_spans_cold"] * 100,
+        "PASS" if r["ids_cold_over_spans_cold"] >= 0.95 else "FAIL"))
+    lines.append("| ids/spans warm | %.1f%% | ≥ 95%%: %s |" % (
+        r["ids_warm_over_spans_warm"] * 100,
+        "PASS" if r["ids_warm_over_spans_warm"] >= 0.95 else "FAIL"))
+    lines += ["", "| tiktoken r50k reference | envelope MB/s |",
+              "|---|---:|"]
+    for dom, e in rec["tiktoken_reference"].items():
+        lines.append("| %s | %.2f |" % (dom, e["mb_s"]))
+    lines.append("")
+    lines.append(
+        "The judge-parity anchor: ratec's judge core at tiktoken parity "
+        "in isolation is an attribution claim (PLAN_v0.8) — these rows "
+        "are the same-corpus reference the next attribution re-run "
+        "starts from.")
+    return "\n".join(lines) + "\n"
+
+
 TABLES = {
-    "scale": ("research/scale_mix15.8MB.json", render_scale),
-    "fertility": ("research/bench_tiktoken.json", render_fertility),
-    "ladder": ("research/twin_ladder.json", render_ladder),
-    "c_sweep": ("research/lm_c_sweep.json", render_c_sweep),
+    "scale": ("README.md", "research/scale_mix15.8MB.json", render_scale),
+    "fertility": ("README.md", "research/bench_tiktoken.json", render_fertility),
+    "ladder": ("README.md", "research/twin_ladder.json", render_ladder),
+    "c_sweep": ("README.md", "research/lm_c_sweep.json", render_c_sweep),
+    "quietbox": ("BENCHMARKS.md", "research/quietbox_envelope.json",
+                 render_quietbox),
 }
 
+FILES = {}
+for _name, (_path, _record, _render) in TABLES.items():
+    FILES.setdefault(_path, []).append(_name)
 
-def regenerate(readme_text):
-    out = readme_text
-    for name, (record, render) in TABLES.items():
+
+def regenerate(path, names):
+    out = open(path).read()
+    for name in names:
+        _path, record, render = TABLES[name]
         body = render(load(os.path.basename(record)))
         begin = f"<!-- table:{name} generated from {record} — do not edit; run make tables -->"
         end = f"<!-- /table:{name} -->"
         pre, _sep, rest = out.partition(f"{begin}\n")
         if not _sep:
-            raise SystemExit(f"sentinels for {name} missing from README.md")
-        _old, _sep2, post = rest.partition(f"\n{end}")
+            raise SystemExit(f"sentinels for {name} missing from {path}")
+        body_out, _sep2, post = rest.partition(end)
         if not _sep2:
             raise SystemExit(f"closing sentinel for {name} missing")
         out = f"{pre}{begin}\n{body}{end}{post}"
@@ -154,22 +227,29 @@ def regenerate(readme_text):
 
 def main():
     check = "--check" in sys.argv
-    text = open(README).read()
-    new = regenerate(text)
-    if new == text:
-        print("make tables: README tables match the records")
+    drifted = []
+    changed = False
+    for path, names in FILES.items():
+        text = open(path).read()
+        new = regenerate(path, names)
+        if new != text:
+            changed = True
+            for n in names:
+                _path, record, render = TABLES[n]
+                body = render(load(os.path.basename(record)))
+                if body not in text:
+                    drifted.append(f"{path}:{n}")
+    if not changed:
+        print("make tables: README + BENCHMARKS tables match the records")
         return
     if check:
-        # report which tables drifted for the test's failure message
-        drifted = [n for n in TABLES
-                   if render(load(os.path.basename(TABLES[n][0])))
-                   not in text]
-        print("make tables --check: README tables STALE: "
-              + ", ".join(drifted))
+        print("make tables --check: tables STALE: " + ", ".join(drifted))
         sys.exit(1)
-    with open(README, "w") as f:
-        f.write(new)
-    print("make tables: README tables regenerated from records")
+    for path in FILES:
+        new = regenerate(path, FILES[path])
+        with open(path, "w") as f:
+            f.write(new)
+    print("make tables: README + BENCHMARKS tables regenerated from records")
 
 
 if __name__ == "__main__":

@@ -11,19 +11,58 @@ MB/s on different days on this one box. Absolute MB/s are therefore
 host-day-dependent; what the design promises — and what the ABBA
 interleaved harness actually verifies — is the RELATIVE ordering and the
 scaling behavior below. Always compare entries within one `bench()` run,
-never across sessions.
+never across sessions. The quiet-box envelope below is the anchor that
+makes this survivable: the 1.0 per-lane floors are RATIOS of the
+envelope, so a re-issue on a different host lifts the floors, never the
+ratios.
 
-## Measured on this host (2026-11-21, `ratec.bench()`, 4 MiB mixed
-text/code/UTF-8 stream, c=20, threads=2, best-of-3)
+## The quiet-box envelope (the 1.0 floors anchor — PLAN_v0.9 P1.1)
 
-| entry point                        | MB/s   | note |
-|------------------------------------|--------:|------|
-| `RateC.encode_bytes`               | 17.78  | sequential judge+patcher, ids + book |
-| `RateC.encode_to_spans`            | 18.01  | tuple-free `as_arrays=True` output — ≈ encode_bytes (the v0.8.9 GIL-free raw path) |
-| `RateC.encode_stream_parallel`     | 24.52  | runs mode, threads=2, spans only |
-| `…encode_stream_parallel(ids=True)`| 23.93  | v0.9.0: spans **+ token stream**; the intern pass is itself thread-parallel (`intern_threads`, default = threads) — warm books make it ≈ free, cold books pay the ordered distinct-insert merge |
-| `RateC.decode_bytes`               | 13423  | memcpy/hash-bound book read; scales with `decode_batch(threads=k)` (v0.8.9: 120 → 177 Mids/s at 2 threads on the same corpus shape) |
-| `ratec.batch_encode`               | 28.60  | per-doc cold engines, thread-parallel, 1 MiB docs |
+Produced by `bench/bench_envelope.py` into
+`research/quietbox_envelope.json` (drift-guarded: regenerate the table
+with `make tables`). "Quiet" is a protocol, not a host claim: 3
+independent rounds, every lane advancing one rep per rotation
+(round-robin across lanes, so drift hits all lanes equally instead of
+biasing whoever runs second), each lane reduced to its per-round
+median, and the envelope = the minimum of the medians — the quietest
+window the host gave us. Cold AND warm stream pairs are recorded: the
+cold pair (fresh engine per rep) is the prep-pipeline shape and carries
+the P1.2 gate ratio (ids ≥ 95% of spans-only); the warm pair is the
+repeated-stream LM-prep shape. The record carries full provenance:
+load average before/after, the governor probe result (this container
+exposes no cpufreq sysfs — recorded as such, never invented), CPU
+state, affinity, and exactness cross-checks on all four shipped
+domains.
+
+<!-- table:quietbox generated from research/quietbox_envelope.json — do not edit; run make tables -->
+Envelope: min-of-3-round medians, round-robin interleave, 2026-11-22; provenance (loadavg, governor probe, affinity, exactness cross-checks) in the record. The 1.0 per-lane floors are RATIOS of these numbers, so a re-issue on a better host lifts the floors, never the ratios.
+
+| lane (exact, 4 MiB stream) | envelope MB/s | round medians |
+|---|---:|---|
+| `RateC.encode_bytes` | 17.78 | 17.78 18.59 18.52 — sequential judge+patcher; persistent engine, book persists across reps (the `bench()` semantics) |
+| `RateC.encode_to_spans` | 18.34 | 18.35 18.40 18.34 — tuple-free `as_arrays=True`; pool engine, `reset()` per rep |
+| `encode_stream_parallel` (spans) | 22.37 | 22.37 23.97 22.44 — fresh engine per rep — the prep-pipeline cold shape |
+| `…(ids=True)` cold | 23.14 | 23.75 23.30 23.14 — fresh engine per rep — includes the cold-book intern merge |
+| `encode_stream_parallel` (spans, warm) | 23.27 | 24.13 23.99 23.27 — persistent engine, saturated book |
+| `…(ids=True)` warm | 23.13 | 23.50 23.13 23.79 — saturated book — the intern pre-probe hits |
+| `RateC.decode_bytes` | 10757.58 | 10801.93 10757.58 10802.29 — single-thread full-book read of the stream ids |
+| `RateC.decode_batch(threads=2)` | 13724.82 | 13724.82 13835.60 13958.45 — 8-way id fan |
+| `ratec.batch_encode(threads=2)` | 23.17 | 24.04 24.07 23.17 — 4 x 1 MiB docs, per-doc cold engines |
+
+| gate ratio (P1.2) | value | gate |
+|---|---:|---|
+| ids/spans cold | 103.4% | ≥ 95%: PASS |
+| ids/spans warm | 99.4% | ≥ 95%: PASS |
+
+| tiktoken r50k reference | envelope MB/s |
+|---|---:|
+| english | 14.10 |
+| code | 12.16 |
+| chinese | 13.62 |
+| base64 | 9.12 |
+
+The judge-parity anchor: ratec's judge core at tiktoken parity in isolation is an attribution claim (PLAN_v0.8) — these rows are the same-corpus reference the next attribution re-run starts from.
+<!-- /table:quietbox -->
 
 ## The contract per entry point
 
