@@ -16,6 +16,7 @@ True
 from __future__ import annotations
 
 import enum
+import hashlib
 import zlib
 from typing import Iterable, Sequence
 
@@ -25,7 +26,7 @@ from . import _rcengine as _rc
 
 __all__ = ["RateC", "RatecError", "RatecErrorCode", "patch_from_sur",
            "batch_spans", "chunked_prep", "export_tokenizer_json",
-           "__version__"]
+           "export_gguf", "__version__"]
 RatecError = _rc.RatecError
 
 
@@ -967,6 +968,93 @@ def chunked_prep(chunks, c: float = 20, engine_bytes: int = 1 << 32,
         finish()
     return out if sink is None else []
 
+
+# GGUF metadata value types (llama.cpp enum gguf_type)
+_T_U8, _T_I8, _T_U16, _T_I16, _T_U32, _T_I32, _T_F32, _T_BOOL = range(8)
+_T_STRING, _T_ARRAY, _T_U64, _T_I64, _T_F64 = 8, 9, 10, 11, 12
+
+
+def export_gguf(engine, path=None):
+    """Export a trained engine's book as a GGUF v3 metadata container.
+
+    The llama.cpp bridge (PLAN_v0.9 P3.2) — as a DOCUMENTED SUBSET: the
+    container is a valid GGUF v3 file (magic, version, zero tensors,
+    typed KVs) that any GGUF parser can read, carrying
+
+      tokenizer.ggml.model      "ratec-adaptive" (NOT a llama.cpp BPE:
+                                llama.cpp must not be used to
+                                re-tokenize with this file — ratec's
+                                segmentation is the algorithm, and the
+                                vocab table alone cannot reproduce it)
+      tokenizer.ggml.tokens     the book, index == id, latin-1 strings
+                                (byte-exact, invertible)
+      tokenizer.ggml.scores     0.0 per token (no learned scores — the
+                                vocabulary is adaptive, not trained)
+      tokenizer.ggml.token_type 1 (NORMAL) per token
+      ratec.c / ratec.book.count / ratec.book.sha256
+      ratec.snapshot.v8         the engine's full v8 snapshot, byte
+                                array — the authoritative state; sha256
+                                bound by ratec.snapshot.sha256
+
+    The round-trip gate (tests/test_gguf.py) parses the container with
+    an independent GGUF reader and asserts vocab equality + that the
+    embedded snapshot reloads bit-exactly. `engine` needs
+    store_book=True (BOOKLESS otherwise, like decode). Returns the
+    bytes; writes to `path` when given.
+    """
+    dump = (engine.book_dump() if hasattr(engine, "book_dump")
+            else engine._eng.book_dump())
+    snapshot = engine._eng.save_state()
+    digest = hashlib.sha256(snapshot).hexdigest()
+
+    import struct as _s
+
+    def gstr(x):
+        b = x.encode("utf-8")
+        return _s.pack("<Q", len(b)) + b
+
+    def garr(elem_type, packer, vals):
+        return _s.pack("<IQ", elem_type, len(vals)) + b"".join(
+            packer(v) for v in vals)
+
+    kvs = []
+    u32 = lambda v: _s.pack("<I", v)
+    f64 = lambda v: _s.pack("<d", v)
+    u64 = lambda v: _s.pack("<Q", v)
+    f32 = lambda v: _s.pack("<f", v)
+    i32 = lambda v: _s.pack("<i", v)
+
+    def kv(key, typ, packer, val):
+        kvs.append(gstr(key) + u32(typ) + packer(val))
+
+    kv("general.architecture", _T_STRING, gstr, "ratec")
+    kv("general.name", _T_STRING, gstr, "ratec-adaptive-book")
+    kv("ratec.format.version", _T_U32, u32, 1)
+    kv("ratec.c", _T_F64, f64, float(engine.c))
+    kv("ratec.book.count", _T_U64, u64, len(dump))
+    kv("ratec.book.sha256", _T_STRING, gstr,
+       hashlib.sha256(b"".join(dump)).hexdigest())
+    kv("ratec.snapshot.v8", _T_ARRAY,
+       lambda vals: _s.pack("<IQ", _T_U8, len(vals))
+       + b"".join(_s.pack("<B", v) for v in vals), list(snapshot))
+    kv("ratec.snapshot.sha256", _T_STRING, gstr, digest)
+    kv("tokenizer.ggml.model", _T_STRING, gstr, "ratec-adaptive")
+    kv("tokenizer.ggml.tokens", _T_ARRAY,
+       lambda vals: _s.pack("<IQ", _T_STRING, len(vals))
+       + b"".join(gstr(v.decode("latin-1")) for v in vals), list(dump))
+    kv("tokenizer.ggml.scores", _T_ARRAY,
+       lambda vals: _s.pack("<IQ", _T_F32, len(vals))
+       + b"".join(f32(v) for v in vals), [0.0] * len(dump))
+    kv("tokenizer.ggml.token_type", _T_ARRAY,
+       lambda vals: _s.pack("<IQ", _T_I32, len(vals))
+       + b"".join(i32(v) for v in vals), [1] * len(dump))
+
+    out = (b"GGUF" + _s.pack("<I", 3) + _s.pack("<Q", 0)
+           + _s.pack("<Q", len(kvs)) + b"".join(kvs))
+    if path is not None:
+        with open(path, "wb") as f:
+            f.write(out)
+    return out
 
 def export_tokenizer_json(engine, path=None, pretty: bool = True):
     """Export a trained engine's book as an HF `tokenizer.json` vocab.

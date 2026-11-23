@@ -12,10 +12,10 @@ vocab files, any C, any byte stream (text, code, CJK, images, audio, ...).
 """
 from .api import (RateC, RatecError, RatecErrorCode, patch_from_sur,
                   batch_spans, bench, batch_encode, chunked_prep,
-                  export_tokenizer_json, solve_c, solve_c_for_book,
-                  __version__)
+                  export_tokenizer_json, export_gguf, solve_c,
+                  solve_c_for_book, __version__)
 
 __all__ = ["RateC", "RatecError", "RatecErrorCode", "patch_from_sur",
            "batch_spans", "bench", "batch_encode", "chunked_prep",
-           "export_tokenizer_json", "solve_c", "solve_c_for_book",
-           "__version__"]
+           "export_tokenizer_json", "export_gguf", "solve_c",
+           "solve_c_for_book", "__version__"]
