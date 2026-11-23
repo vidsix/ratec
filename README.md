@@ -6,7 +6,7 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.9.1, experimental — the hardening release (road to
+> **Status:** v0.9.2, experimental — the production-shape release (road to
 > v1.0.0). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
@@ -511,6 +511,21 @@ paths to raw speed.
     jobs. CHANGELOG has the full record. Remaining to 1.0: v0.9.2
     production shapes (per-order tables, GGUF/vLLM, nightly soak, S8)
     and the freeze audit.
+19. **~~v0.9.2 — the production-shape release~~ done (v0.9.2)** — the
+    v1.0 levers get measured verdicts: per-order tables DECLINED with
+    the occupancy record (`research/perorder_tables.json` — orders 3-5
+    already sized; orders 1-2 dense-direct and L2-resident), the
+    fast-lane KEEP decision (`research/fastlane_decision.json` —
+    deviation ≤ 1.19e-07, segmentation identical, delta marginal), the
+    nightly soak (`bench/soak_nightly.py` + `nightly.yml` — first
+    record 198 rounds flat-RSS PASS) and its workflow, `export_gguf`
+    (the GGUF v3 carriage with the documented no-re-tokenize subset),
+    the vLLM recipe (`docs/vllm_recipe.md` — "encoding is ratec's,
+    decoding is anyone's"), and S8 (`lean/RatecServo.lean` —
+    solve_c's bisection contract: totality, the crossing-bracket
+    invariant, termination, achieved-exactness). Seven LEAN files
+    compile no-sorry. Remaining to 1.0: the freeze audit, aarch64
+    wheels, the semver policy, the provenance record.
 
 
 ## Layout

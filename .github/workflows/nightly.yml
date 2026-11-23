@@ -1,0 +1,49 @@
+name: nightly
+
+on:
+  schedule:
+    # 03:07 UTC daily — the soak gate needs "nightly green >= 1 week
+    # before rc" (PLAN_v0.9 P2.4 / the 1.0 contract's flat-RSS soak)
+    - cron: "7 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  soak:
+    # the multi-GiB flat-RSS soak: continuous mixed operations
+    # (parallel spans+ids, decode round-trips, intern equivalence,
+    # snapshot continuations, batch) with RSS sampled per round
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numpy + setuptools
+        run: pip install numpy setuptools
+      - name: Build C extension in place
+        run: python setup.py build_ext --inplace
+      - name: 60-minute soak (flat RSS + zero exceptions + bit-exact checkpoints)
+        run: python bench/soak_nightly.py --minutes 60
+      - name: Property fuzz + snapshot fuzz (the mutant battery, fresh)
+        run: |
+          python tests/test_fuzz.py
+          python tests/test_snapfuzz.py
+
+  nightly-suite:
+    # the full correctness pass once a night on a second runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install numpy tiktoken setuptools pytest
+      - name: Build
+        run: python setup.py build_ext --inplace
+      - name: make test
+        run: make test
+      - name: pytest
+        run: python -m pytest tests/ -q
