@@ -1,21 +1,22 @@
 {
  "record": {
-  "ratec_version": "0.9.3",
+  "ratec_version": "1.0.0rc1",
   "deps": {
    "numpy": "2.1.3",
-   "tiktoken": "0.14.0"
+   "tiktoken": "0.14.0",
+   "transformers": "5.24.0"
   },
-  "git_rev": "24a5eb9c",
+  "git_rev": "2c66a81",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-23T11:03:53+00:00",
+  "created_utc": "2026-11-23T20:48:08+00:00",
   "inputs": {}
  },
- "git_rev": "24a5eb9c",
+ "git_rev": "2c66a81",
  "lean_toolchain": "leanprover/lean4:v4.36.0",
  "generator": "bench/provenance.py",
  "reproduce_record": "python bench/provenance.py  # re-run and diff against research/provenance_1.0.json \u2014 any changed hash is a contract-artifact change",
@@ -63,14 +64,14 @@
    "reproduce": "elan: lean lean/RatecServo.lean (no-sorry)"
   },
   "research/quietbox_envelope.json": {
-   "sha256": "ca887d60f6b015285fa16b8b8ba674276e4aa76fa69eea6733c03a77fecc00a7",
-   "bytes": 5530,
+   "sha256": "7fefd2a47bbf35ade670a98e0fe1d787f1f34893b0a45f1ac93bc5917afb8bca",
+   "bytes": 5553,
    "what": "P1.1 \u2014 the quiet-box envelope (the 1.0 perf reference)",
    "reproduce": "release procedure: full quiet-box re-record"
   },
   "research/perf_floors.json": {
-   "sha256": "41a6ac642c7938b6cd83b49aab1901c06ddda1a58854066f8b0b83bf50832e69",
-   "bytes": 1904,
+   "sha256": "434c3d7b9d9b89a7a5a568294037f9b4a0ea42497c69eaf4553e579abe96b5d5",
+   "bytes": 1876,
    "what": "the executable floor check vs the envelope (tiered floors)",
    "reproduce": "python bench/perf_floors.py"
   },
@@ -81,8 +82,8 @@
    "reproduce": "python bench/gate_8gib.py (32 x 256 MiB engines)"
   },
   "research/fastlane_parity.json": {
-   "sha256": "4d693f0bfbf987dbd9f92651ae0ecfd0d8ce5c3caee1de008859ae15c3f1cd2b",
-   "bytes": 542,
+   "sha256": "57fd93d92a2225f76a112c1cf09422305c8b69b5d3f72715c4b1db281eda7b7b",
+   "bytes": 541,
    "what": "the fast-lane surprisal-deviation bound (5e-07)",
    "reproduce": "the parity bench (research/ablate_lenfield.py)"
   },
@@ -99,10 +100,28 @@
    "reproduce": "python bench/perorder_gate.py"
   },
   "research/api_manifest.json": {
-   "sha256": "207683cb43fa1a0e445134d4e7d5b25d0109070b67dc8a778e6c0df4a133cfb8",
-   "bytes": 13871,
+   "sha256": "0f3ab80c7fa7e5f917d48e815eea08d3033a3ee1e99d94dac218e771e4367a08",
+   "bytes": 13856,
    "what": "the frozen public API surface (the freeze audit's manifest)",
    "reproduce": "python bench/api_freeze.py + tests/test_api_freeze.py"
+  },
+  "research/integration_proofs.json": {
+   "sha256": "f7c9e0a46f5f472d1248c5a63899f889c474f4bfd0d60231e971fa5a2054d1a4",
+   "bytes": 906,
+   "what": "the ecosystem bridges vs the real packages (tokenizers decode byte-exact, GGUF parse/continuation) \u2014 caught the decoder bug",
+   "reproduce": "python bench/integration_proofs.py"
+  },
+  "research/parallel_scaling.json": {
+   "sha256": "0287439375c8873c6b41f05fcb8eda8a7d1e8c3881f6e6d69956cc228842913a",
+   "bytes": 924,
+   "what": "the infrastructure-speed table (threads 1-8, prep 256 MiB)",
+   "reproduce": "python bench/parallel_scaling.py"
+  },
+  "bench/bench_gigatoken.json": {
+   "sha256": "006f181cef00347f845dc023a057c7f77b72663d68e2af4933ab5f424af21c8f",
+   "bytes": 412,
+   "what": "the sustained 1 GiB record (spans/judge serial + the chunked_prep fleet arm, 9.94 MB/s / 1.13 Mtok/s)",
+   "reproduce": "python bench/bench_gigatoken.py"
   },
   "research/soak_2026-11-23T0941.json": {
    "sha256": "fa5805782e23d8c2b571b34dc6a5e9e35563945adc44b8357d136e0097eb8a04",
@@ -123,8 +142,8 @@
    "reproduce": "python tests/test_snapfuzz.py"
   },
   ".github/workflows/ci.yml": {
-   "sha256": "5ad402f9d37b31d1323d5f37b5c5c4bfa1beac0daa09000cd44489817c4642a6",
-   "bytes": 6424,
+   "sha256": "e84772282d3755c1c4775060e9b8ef89ef025f28b7a20b2bc5753c2067e2575a",
+   "bytes": 6692,
    "what": "CI: suite + bit-exactness + tables + LEAN compile-all + aarch64",
    "reproduce": "GitHub Actions on push"
   },
@@ -136,5 +155,5 @@
   }
  },
  "missing": [],
- "count": 19
+ "count": 22
 }

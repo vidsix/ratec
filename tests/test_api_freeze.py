@@ -64,7 +64,8 @@ def test_api_manifest_matches_the_frozen_surface():
     assert frozen["python"]["RatecErrorCode"] == {
         m.name: str(m.value) for m in ratec.RatecErrorCode}
     assert frozen["python"]["RatecError_attrs"] == [
-        n for n in sorted(dir(ratec.RatecError)) if not n.startswith("_")]
+        n for n in sorted(ratec.RatecError.__dict__)
+        if not n.startswith("_")]
     assert frozen["c"]["functions"] == sorted(
         n for n in dir(_api._rc) if not n.startswith("_")), \
         "C entry-point drift vs research/api_manifest.json"

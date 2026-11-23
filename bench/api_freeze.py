@@ -94,8 +94,14 @@ def main():
     # the coded error taxonomy
     manifest["python"]["RatecErrorCode"] = {
         m.name: str(m.value) for m in ratec.RatecErrorCode}
+    # the WRAPPER-DEFINED public attrs only: inherited BaseException
+    # attrs (args, with_traceback) are interpreter-level, and add_note
+    # exists only on 3.11+ — freezing dir() made the manifest break on
+    # older interpreters (the 3.10 CI job caught it). The contract is
+    # what the wrapper defines.
     manifest["python"]["RatecError_attrs"] = [
-        n for n in sorted(dir(ratec.RatecError)) if not n.startswith("_")]
+        n for n in sorted(ratec.RatecError.__dict__)
+        if not n.startswith("_")]
     manifest["python"]["__all__"] = list(ratec.__all__)
 
     # C entry points the wrappers promise

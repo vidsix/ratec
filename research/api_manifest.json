@@ -870,11 +870,7 @@
    "ARGUMENT": "ARGUMENT",
    "STATE": "STATE"
   },
-  "RatecError_attrs": [
-   "add_note",
-   "args",
-   "with_traceback"
-  ],
+  "RatecError_attrs": [],
   "__all__": [
    "RateC",
    "RatecError",
@@ -903,22 +899,23 @@
   "doc_line": "RateC tokenizer engine (C core)."
  },
  "meta": {
-  "__version__": "0.9.3"
+  "__version__": "1.0.0rc1"
  },
  "record": {
-  "ratec_version": "0.9.3",
+  "ratec_version": "1.0.0rc1",
   "deps": {
    "numpy": "2.1.3",
-   "tiktoken": "0.14.0"
+   "tiktoken": "0.14.0",
+   "transformers": "5.24.0"
   },
-  "git_rev": "24a5eb9c",
+  "git_rev": "2c66a81",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-23T11:03:53+00:00",
+  "created_utc": "2026-11-23T20:48:07+00:00",
   "inputs": {}
  }
 }
