@@ -37,7 +37,7 @@ setup(
             sources=["ratec/_rcengine.c"],
             define_macros=[("RC_VERSION", f'"{VERSION}"')],
             extra_compile_args=[
-                "-O3", *ARCH_ARGS,
+                "-O3", "-fno-math-errno", *ARCH_ARGS,
                 # mandatory for bit-exactness with the reference pipeline
                 "-ffp-contract=off", "-fno-fast-math",
             ],
