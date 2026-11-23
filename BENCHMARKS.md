@@ -116,10 +116,15 @@ fresh sequential engine; the fastest path when the corpus is many
 small/medium docs instead of one long stream.
 
 **`exact=False` (the fast lane)** — `RateC(c=20, exact=False)`: identical
-structure, approximate log2. Historically +2.5–7.5% over the exact lane
-on this box (host-dependent); its outputs are NOT stable across
-versions and may differ from the exact lane's segmentation (documented
-deviation). The LEAN companions (`RatecTiling.lean` v0.9.0b,
+structure, approximate log2. The v0.9.2 parity decision
+(`research/fastlane_decision.json`): **KEEP, documented-unstable,
+formally outside the 1.0 bit-freeze** — measured on this build:
+surprisal deviation ≤ 1.19e-07 (bound 5e-07), segmentation IDENTICAL to
+the exact lane on all four shipped domains, speed delta −1.1%…+4.0%
+(marginal, within host noise on some domains). Its only promise is
+STRUCTURAL and machine-checked for any surprisal function (LEAN
+T2/S5/S6): tiling, round-trip, and intern ids can never break. If a
+future parity run fails the 5e-07 bound, the decision flips to REMOVE. The LEAN companions (`RatecTiling.lean` v0.9.0b,
 `RatecIntern.lean` v0.9.0) prove the structural guarantees: the
 patcher's tiling is correct for ANY surprisal function, so
 approximation can never break the round-trip, and the parallel intern

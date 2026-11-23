@@ -1,0 +1,104 @@
+{
+ "record": {
+  "ratec_version": "0.9.1",
+  "deps": {
+   "numpy": "2.1.3",
+   "tiktoken": "0.14.0"
+  },
+  "git_rev": "1e65309",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-23T09:08:58+00:00",
+  "inputs": {
+   "fixture_english": {
+    "sha256": "6f5782af1d5b4c572bd4cc72f27bf09d0550d8df54bd2b5de7dce5765ea65afc",
+    "path": "tests/data/fixtures/english.span.bin",
+    "bytes": 267232
+   },
+   "fixture_code": {
+    "sha256": "411a6530352d2ad5d3f5e7cc1328a0acf86fddab497cb52c55e9c768a4c961de",
+    "path": "tests/data/fixtures/code.span.bin",
+    "bytes": 164574
+   },
+   "fixture_chinese": {
+    "sha256": "39a95c6ffe908a4dd8c2dfbfcd0647a8ea40a078b40240179a2851ea93ddcdec",
+    "path": "tests/data/fixtures/chinese.span.bin",
+    "bytes": 267231
+   },
+   "fixture_base64": {
+    "sha256": "c187504d946ce16476a08543e820cd8b66ea048ea66d5c6fb600e716b4b6a92c",
+    "path": "tests/data/fixtures/base64.span.bin",
+    "bytes": 260568
+   }
+  }
+ },
+ "deviation": {
+  "english": 1.1919333289708574e-07,
+  "code": 1.1218971550146615e-07,
+  "chinese": 1.1917864461702837e-07,
+  "base64": 6.991378930640627e-08
+ },
+ "segmentation": {
+  "english": {
+   "starts_exact": 38957,
+   "starts_fast": 38957,
+   "starts_shifted": 0,
+   "identical_segmentation": true
+  },
+  "code": {
+   "starts_exact": 22672,
+   "starts_fast": 22672,
+   "starts_shifted": 0,
+   "identical_segmentation": true
+  },
+  "chinese": {
+   "starts_exact": 55239,
+   "starts_fast": 55239,
+   "starts_shifted": 0,
+   "identical_segmentation": true
+  },
+  "base64": {
+   "starts_exact": 86857,
+   "starts_fast": 86857,
+   "starts_shifted": 0,
+   "identical_segmentation": true
+  }
+ },
+ "speed": {
+  "english": {
+   "exact_mb_s": 7.8,
+   "fast_mb_s": 7.84,
+   "fast_over_exact_pct": 0.56
+  },
+  "code": {
+   "exact_mb_s": 6.19,
+   "fast_mb_s": 6.44,
+   "fast_over_exact_pct": 3.97
+  },
+  "chinese": {
+   "exact_mb_s": 7.3,
+   "fast_mb_s": 7.44,
+   "fast_over_exact_pct": 1.86
+  },
+  "base64": {
+   "exact_mb_s": 6.03,
+   "fast_mb_s": 5.96,
+   "fast_over_exact_pct": -1.07
+  }
+ },
+ "decision": {
+  "lever": "fast-lane parity decision",
+  "verdict": "KEEP \u2014 documented-unstable, structurally proven, formally outside the 1.0 bit-freeze",
+  "rationale": [
+   "the fast lane's only promise is STRUCTURAL and it is machine-checked for any surprisal function (LEAN T2/S5/S6): tiling, round-trip, and intern ids can never break \u2014 what is unstable is which patches the approximation draws",
+   "the measured surprisal deviation is 1.19e-07 (bound 5e-07 asserted in research/fastlane_parity.json) and segmentation on the shipped domains is IDENTICAL",
+   "the measured speed delta is +4.0% at best on this host-day \u2014 marginal, but the lane costs nothing to keep (one flag through the judge), the FST-lane experiments (v0.9.0b) showed the approximation is not a big win even when it works, and removing a documented API in a hardening release is an unnecessary break",
+   "if a future release ever fails its own parity bound (5e-07), the decision flips to REMOVE \u2014 the record re-measures on every parity run"
+  ],
+  "contract_note": "1.0 bit-freeze covers the exact lane only; the fast lane stays documented-unstable by this decision (PLAN_v0.9 frozen contract)."
+ }
+}
