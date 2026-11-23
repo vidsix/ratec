@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.9.3 — the rc-readiness release
+
+Everything the 1.0rc gate list needs, delivered as executable artifacts
+before the freeze itself.
+
+### The freeze, made executable
+
+- **The API freeze audit** (`bench/api_freeze.py` +
+  `tests/test_api_freeze.py`): the ENTIRE public surface — 9 module
+  functions, 20 RateC methods + 1 classmethod + properties, the
+  constructor's full signature (names/kinds/defaults, annotations as
+  strings), the 8-code error taxonomy, `__all__`, and the 6 C entry
+  points — introspected into `research/api_manifest.json` with full
+  provenance. The drift test regenerates in memory and asserts exact
+  equality: any rename/signature/default/entry-point change fails the
+  suite. The freeze is no longer a promise; it is a test.
+- **The perf-floors gate** (`bench/perf_floors.py`): all nine ratec
+  lanes re-measured with the envelope's exact lane semantics and held
+  to tiered floors — ≥ 0.90 of the quiet-box envelope for lanes ≥ 10 ms,
+  ≥ 0.70 for sub-millisecond lanes (where ~50 µs of fixed call overhead
+  is a ±15% class — the same envelope's two decode lanes measure 10.7
+  and 14.3 GB/s for the same work). First run: ALL NINE LANES PASS
+  (encode 0.99–1.22, decode_bytes 0.845, decode_batch 0.970).
+- **The 1.0 provenance record** (`bench/provenance.py` →
+  `research/provenance_1.0.json`): all 19 contract artifacts — the 7
+  LEAN proof files, the envelope, the floor check, the 8 GiB gate, the
+  parity/decision records, the API manifest, the first soak record,
+  both fuzz batteries, the CI workflows — hashed with what each
+  establishes and how it is reproduced. Re-run and diff: a changed hash
+  is a contract-artifact change, a reviewable commit, never drift.
+
+### The policy and the cookbook
+
+- **`docs/STABILITY.md`** — the versioning contract written BEFORE 1.0:
+  what is frozen, what is explicitly NOT (the fast lane with its 5e-07
+  tripwire), the SemVer mapping, the deprecation path, and the 8-step
+  freeze-audit checklist.
+- **`docs/COOKBOOK.md`** (P3.4) — ten recipes grounded in the frozen
+  signatures: the basic loop, parallel, batch, multi-GiB prep (with the
+  uint32 span-space limit documented honestly), rate control,
+  books/transplants (`to_ranks` + `from_state`; `book_dump` is not
+  public), snapshots/pruning, the bridges, the error taxonomy,
+  maintenance. EVERY recipe executed against the current build before
+  commit.
+
+### The wheel pipeline
+
+- **`.github/workflows/wheels.yml`**: on v* tags — the sdist (plus a
+  wheel built FROM the sdist as the provenance check), cibuildwheel
+  manylinux cp39–cp312-abi3 wheels on x86_64 AND aarch64
+  (ubuntu-24.04-arm — the arch the CI suite already proves green),
+  per-wheel smoke tests, and automatic attachment to the GitHub
+  release. Verified locally end-to-end: sdist → wheel → clean-venv
+  install → byte-exact round-trip.
+
+### Housekeeping
+
+- The branch push law caught a silent failure this cycle: commits had
+  landed on the release merge branch while the working branch sat
+  stale — recovered by pushing HEAD explicitly; the milestone pushes
+  are verified by ls-remote from now on.
+
 ## v0.9.2 — the production-shape release
 
 The v1.0 levers get their measured verdicts and the ecosystem bridges
