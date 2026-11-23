@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.0.0rc2 — the day-1 support candidate
+
+The rc that makes ratec models loadable by the STANDARD tooling on
+day 1 — and removes the one blocker the rc1 proof uncovered.
+
+### The GGUF carriage is now readable by the standard reader (the fix)
+
+The rc1 integration proof recorded that the official `gguf` package
+(llama.cpp's own Python reader, gguf-py) OOM-killed a 3 GiB box on our
+5 MB export. Root cause FOUND: gguf-py walks EVERY array PER ELEMENT
+(`for idx in range(alen)` recursing per element, each with its own
+numpy object) — our snapshot rode as a ~5M-element u8 array, which is
+5M recursive calls. Structurally valid GGUF, hostile to the ecosystem.
+
+The fix: `ratec.snapshot.v8` now rides as ONE base64 STRING — a single
+length-prefixed part in every GGUF reader, pure ASCII, byte-exact,
+sha256-bound by `ratec.snapshot.sha256` over the raw snapshot bytes.
+Verified: the official gguf package now loads the 13 MB export (23k
+vocab + 10 MB snapshot) under a 2 GiB memory cap, and the proof
+records `gguf_official_reader_ok: True` as a first-class check. The
+snapshot v8 FILE format is untouched (this is the container's value
+encoding, not the frozen engine state); `tests/test_gguf.py` and the
+cookbook/recipe docs carry the decode recipe.
+
+### The day-1 engine story, written down
+
+`docs/vllm_recipe.md` gains the day-1 matrix: HF transformers
+(through the tokenizers layer it wraps), vLLM and SGLang (the same
+tokenizers layer — pre-encode, feed `prompt_token_ids`), llama.cpp
+(the GGUF metadata subset, re-tokenization forbidden), plain
+`tokenizers`. README gains the release-wheel install commands so infra
+loads ratec without a compiler. The integration proof remains the
+executable half of the story: tokenizers decode byte-exact, vocab ==
+book, snapshot continuation bit-exact — PASS at rc2 with the official
+reader check added.
+
+### Everything else from rc1, unchanged
+
+Zero API drift at the audit (9 functions / 20 methods / 8 codes / 6 C
+entry points), provenance 22/22, the envelope/floors/gigatoken records
+stand, the nightly-green clock runs.
+
 ## v1.0.0rc1 — the release candidate
 
 The candidate for "the actual ratec": the freeze audit executed at the

@@ -47,6 +47,30 @@ package is installed, load the file through
 tokenizer layer takes (skipped when the package is absent; the JSON
 contract is the required half).
 
+## The day-1 engine matrix (rc2)
+
+| engine | support | path |
+| --- | --- | --- |
+| HF transformers | proven (the tokenizers layer it wraps) | `tokenizers.Tokenizer.from_file` — decode byte-exact (`research/integration_proofs.json`) |
+| vLLM / SGLang | proven (the tokenizers layer both call) | pre-encode with ratec, feed `prompt_token_ids`; decode via the vocab |
+| llama.cpp | proven (metadata subset) | `export_gguf`; the GGUF carries vocab + the snapshot; llama.cpp must NOT re-tokenize |
+| plain tokenizers | proven | same file as transformers |
+
+The GGUF snapshot rides as ONE base64 string (`ratec.snapshot.v8`,
+sha256-bound by `ratec.snapshot.sha256` over the raw bytes):
+
+```python
+import base64, gguf                      # gguf-py ships with llama.cpp
+r = gguf.GGUFReader("ratec-c20.gguf")
+kv = r.fields["ratec.snapshot.v8"]
+raw = bytes(kv.parts[kv.data[0]])
+eng = ratec.RateC.from_state(base64.b64decode(raw))   # continues bit-exact
+```
+
+(Why a string and not a u8 array: gguf-py walks arrays PER ELEMENT —
+the rc1 form, a ~5M-element array, was 5M recursive calls and an OOM
+on a 3 GiB box. One string is one part in every reader.)
+
 ## The documented subset
 
 | capability | status |

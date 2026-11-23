@@ -899,23 +899,23 @@
   "doc_line": "RateC tokenizer engine (C core)."
  },
  "meta": {
-  "__version__": "1.0.0rc1"
+  "__version__": "1.0.0rc2"
  },
  "record": {
-  "ratec_version": "1.0.0rc1",
+  "ratec_version": "1.0.0rc2",
   "deps": {
    "numpy": "2.1.3",
    "tiktoken": "0.14.0",
    "transformers": "5.24.0"
   },
-  "git_rev": "2c66a81",
+  "git_rev": "31ffe66",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-23T20:48:07+00:00",
+  "created_utc": "2026-11-23T22:25:15+00:00",
   "inputs": {}
  }
 }

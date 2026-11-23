@@ -20,6 +20,7 @@ Proves, with the same packages a user would pip-install:
 
 Records research/integration_proofs.json (versions + envelope).
 """
+import base64
 import json
 import os
 import subprocess
@@ -132,12 +133,20 @@ with tempfile.TemporaryDirectory() as td:
     buf = open(gp, "rb").read()
     parsed = parse_gguf(buf)          # asserts exact EOF internally
     results["gguf_parse_exact_eof"] = True
+    # the OFFICIAL gguf package (llama.cpp's own Python reader) must
+    # load the file without dying — it walks arrays PER ELEMENT, which
+    # is exactly why the snapshot must not be an array (rc2 fix)
+    import gguf as _gguf
+    _r = _gguf.GGUFReader(gp)
+    results["gguf_official_reader_ok"] = ("ratec.snapshot.v8" in _r.fields)
+    results["gguf_official_reader_version"] = getattr(
+        _gguf, "__version__", "installed")
     print("stage: parsed, kv", len(parsed), "file", len(buf), flush=True)
     # GGUF carries pieces latin-1-decoded (the v0.9.2 bridge's mapping)
     vocab = [v.encode("latin-1") for v in parsed["tokenizer.ggml.tokens"]]
     ok_vocab = sorted(vocab) == sorted(ranks_at_export)
     results["gguf_vocab_equal_book"] = ok_vocab
-    snap_bytes = bytes(parsed["ratec.snapshot.v8"])
+    snap_bytes = base64.b64decode(parsed["ratec.snapshot.v8"])
     cont = ratec.RateC.from_state(snap_bytes)
     results["gguf_snapshot_continues_bit_exact"] = (
         cont.encode_bytes(SAMPLE[:40_000]) == ids)

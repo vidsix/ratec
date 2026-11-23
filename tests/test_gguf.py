@@ -6,6 +6,7 @@ itself is not runnable here — the container validity + content
 equality IS the gate; the documented subset is stated in the
 exporter's docstring and BENCHMARKS.md.
 """
+import base64
 import hashlib
 import struct
 
@@ -90,7 +91,7 @@ def test_gguf_export_roundtrip():
     assert kvs["ratec.book.count"] == len(entries)
     assert kvs["general.architecture"] == "ratec"
     # the embedded snapshot is the engine's own state, sha-bound
-    snap = bytes(kvs["ratec.snapshot.v8"])
+    snap = base64.b64decode(kvs["ratec.snapshot.v8"])
     assert hashlib.sha256(snap).hexdigest() == kvs["ratec.snapshot.sha256"]
     # snapshot-reload semantics: the reloaded engine CONTINUES exactly
     # like the source engine from the same state (ids are warm-book ids)

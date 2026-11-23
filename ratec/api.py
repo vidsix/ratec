@@ -15,6 +15,7 @@ True
 """
 from __future__ import annotations
 
+import base64
 import enum
 import hashlib
 import zlib
@@ -992,9 +993,14 @@ def export_gguf(engine, path=None):
                                 vocabulary is adaptive, not trained)
       tokenizer.ggml.token_type 1 (NORMAL) per token
       ratec.c / ratec.book.count / ratec.book.sha256
-      ratec.snapshot.v8         the engine's full v8 snapshot, byte
-                                array — the authoritative state; sha256
-                                bound by ratec.snapshot.sha256
+      ratec.snapshot.v8         the engine's full v8 snapshot as one
+                                base64 string (ONE reader part in every
+                                GGUF implementation — the rc2 fix; the
+                                rc1 u8-array form made gguf-py walk 5M
+                                elements and OOM). sha256-bound by
+                                ratec.snapshot.sha256 over the raw
+                                snapshot bytes; decode with
+                                base64.b64decode(value)
 
     The round-trip gate (tests/test_gguf.py) parses the container with
     an independent GGUF reader and asserts vocab equality + that the
@@ -1034,9 +1040,16 @@ def export_gguf(engine, path=None):
     kv("ratec.book.count", _T_U64, u64, len(dump))
     kv("ratec.book.sha256", _T_STRING, gstr,
        hashlib.sha256(b"".join(dump)).hexdigest())
-    kv("ratec.snapshot.v8", _T_ARRAY,
-       lambda vals: _s.pack("<IQ", _T_U8, len(vals))
-       + b"".join(_s.pack("<B", v) for v in vals), list(snapshot))
+    # the snapshot rides as ONE base64 STRING, not a u8 array: the
+    # ecosystem's standard Python reader (gguf-py, shipped with
+    # llama.cpp) walks arrays PER ELEMENT — a ~5M-element u8 array is
+    # 5M recursive calls with a numpy object each, which OOMs a 3 GiB
+    # box (the rc1 integration proof hit exactly this). A string is
+    # ONE length-prefixed part in every reader; base64 is pure ASCII,
+    # byte-exact, and integrity-bound by ratec.snapshot.sha256 (over
+    # the RAW snapshot bytes, before base64).
+    kv("ratec.snapshot.v8", _T_STRING, gstr,
+       base64.b64encode(snapshot).decode("ascii"))
     kv("ratec.snapshot.sha256", _T_STRING, gstr, digest)
     kv("tokenizer.ggml.model", _T_STRING, gstr, "ratec-adaptive")
     kv("tokenizer.ggml.tokens", _T_ARRAY,

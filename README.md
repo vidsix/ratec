@@ -6,8 +6,8 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v1.0.0rc1 — the release candidate (the first stable
-> release of the real thing). The C core and byte-level semantics are
+> **Status:** v1.0.0rc2 — the day-1 support candidate (the standard
+> tooling loads ratec models; road to 1.0.0). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -21,7 +21,12 @@ algorithm, it adapts as it reads, and any C works at any time.
 > on foreign boxes, and the base64 fertility number replicates exactly.
 
 ```
-pip install .            # C extension, gcc >= 9, x86-64 (or any 64-bit)
+pip install .            # from source: C extension, gcc >= 9, any 64-bit
+
+# OR the release wheels (no compiler needed — infra, day 1):
+#   pip install https://github.com/vidsix/ratec/releases/download/v1.0.0rc1/ratec-1.0.0rc1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+#   (cp39/cp310/cp311/cp312 x cp312 x aarch64 manylinux2014 wheels on the release;
+#    swap the URL for your interpreter/arch)
 make test                # or: python -m pytest tests/  (conftest builds in place)
 ```
 

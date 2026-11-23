@@ -146,7 +146,16 @@ ratec.export_gguf(tok, "ratec-c20.gguf")             # GGUF v3 carriage
 - **GGUF**: a metadata container — any GGUF parser reads the vocab
   table; llama.cpp must NOT re-tokenize with it (the vocab alone cannot
   reproduce ratec's segmentation). The embedded `ratec.snapshot.v8`
-  (sha256-bound) is the authoritative state.
+  (sha256-bound over the raw bytes) is the authoritative state — a
+  single base64 STRING (one reader part everywhere; an array form made
+  gguf-py walk millions of elements and OOM):
+
+  ```python
+  import base64, gguf                      # gguf-py ships with llama.cpp
+  r = gguf.GGUFReader("ratec-c20.gguf")
+  kv = r.fields["ratec.snapshot.v8"]
+  eng = ratec.RateC.from_state(base64.b64decode(bytes(kv.parts[kv.data[0]])))
+  ```
 
 ## 9. Errors — the coded taxonomy
 
