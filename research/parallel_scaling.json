@@ -1,0 +1,53 @@
+{
+ "stream": {
+  "threads_1": {
+   "ids_mb_s": 13.46,
+   "spans_mb_s": 13.82
+  },
+  "threads_2": {
+   "ids_mb_s": 15.05,
+   "spans_mb_s": 15.9
+  },
+  "threads_4": {
+   "ids_mb_s": 13.98,
+   "spans_mb_s": 14.25
+  },
+  "threads_8": {
+   "ids_mb_s": 13.83,
+   "spans_mb_s": 14.26
+  }
+ },
+ "prep": {
+  "threads_2": {
+   "mb_s": 27.4,
+   "mtok_s": 0.26,
+   "segments": 1
+  },
+  "threads_4": {
+   "mb_s": 26.34,
+   "mtok_s": 0.26,
+   "segments": 1
+  },
+  "threads_8": {
+   "mb_s": 26.06,
+   "mtok_s": 0.25,
+   "segments": 1
+  }
+ },
+ "meta": {
+  "ratec_version": "0.9.3",
+  "deps": {
+   "numpy": "2.1.3"
+  },
+  "git_rev": "c0e553c",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-23T20:18:53+00:00",
+  "inputs": {}
+ },
+ "note": "threads>1 on a 4-vCPU-class box may plateau; the record is host-annotated via the envelope"
+}

@@ -60,8 +60,11 @@ def chunks():                        # any iterable of byte chunks
                 return
             yield b
 
-ids = ratec.chunked_prep(chunks(), c=20, engine_bytes=1 << 32,
-                         threads=2, ids=True)
+segs = ratec.chunked_prep(chunks(), c=20, engine_bytes=1 << 32,
+                          threads=2, ids=True)
+ids = segs[0]["ids"]          # per-segment uint32 arrays; each segment
+                              # carries seg_bytes so offsets can be
+                              # re-based into a u64 global space
 ```
 
 `chunked_prep` encodes each segment on a FRESH engine and the result
