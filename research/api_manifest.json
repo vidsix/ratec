@@ -1,0 +1,924 @@
+{
+ "python": {
+  "functions": {
+   "batch_encode": {
+    "params": [
+     [
+      "docs",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      "Sequence"
+     ],
+     [
+      "c",
+      "POSITIONAL_OR_KEYWORD",
+      "20",
+      "float"
+     ],
+     [
+      "threads",
+      "POSITIONAL_OR_KEYWORD",
+      "0",
+      "int"
+     ],
+     [
+      "fast",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "reserve",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      "int | None"
+     ]
+    ],
+    "return": ""
+   },
+   "batch_spans": {
+    "params": [
+     [
+      "docs",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      "Sequence"
+     ],
+     [
+      "c",
+      "POSITIONAL_OR_KEYWORD",
+      "20",
+      "float"
+     ],
+     [
+      "threads",
+      "POSITIONAL_OR_KEYWORD",
+      "0",
+      "int"
+     ],
+     [
+      "fast",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "reserve",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      "int | None"
+     ]
+    ],
+    "return": ""
+   },
+   "bench": {
+    "params": [
+     [
+      "n",
+      "POSITIONAL_OR_KEYWORD",
+      "4194304",
+      "int"
+     ],
+     [
+      "c",
+      "POSITIONAL_OR_KEYWORD",
+      "20",
+      "int"
+     ],
+     [
+      "threads",
+      "POSITIONAL_OR_KEYWORD",
+      "2",
+      "int"
+     ],
+     [
+      "rounds",
+      "POSITIONAL_OR_KEYWORD",
+      "3",
+      "int"
+     ]
+    ],
+    "return": ""
+   },
+   "chunked_prep": {
+    "params": [
+     [
+      "chunks",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      ""
+     ],
+     [
+      "c",
+      "POSITIONAL_OR_KEYWORD",
+      "20",
+      "float"
+     ],
+     [
+      "engine_bytes",
+      "POSITIONAL_OR_KEYWORD",
+      "4294967296",
+      "int"
+     ],
+     [
+      "threads",
+      "POSITIONAL_OR_KEYWORD",
+      "2",
+      "int"
+     ],
+     [
+      "ids",
+      "POSITIONAL_OR_KEYWORD",
+      "True",
+      "bool"
+     ],
+     [
+      "exact",
+      "POSITIONAL_OR_KEYWORD",
+      "True",
+      "bool"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "reserve",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      "int | None"
+     ],
+     [
+      "sink",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      ""
+     ]
+    ],
+    "return": ""
+   },
+   "export_gguf": {
+    "params": [
+     [
+      "engine",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      ""
+     ],
+     [
+      "path",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      ""
+     ]
+    ],
+    "return": ""
+   },
+   "export_tokenizer_json": {
+    "params": [
+     [
+      "engine",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      ""
+     ],
+     [
+      "path",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      ""
+     ],
+     [
+      "pretty",
+      "POSITIONAL_OR_KEYWORD",
+      "True",
+      "bool"
+     ]
+    ],
+    "return": ""
+   },
+   "patch_from_sur": {
+    "params": [
+     [
+      "sur",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      "np.ndarray | bytes"
+     ],
+     [
+      "c",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      "float"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ]
+    ],
+    "return": "np.ndarray"
+   },
+   "solve_c": {
+    "params": [
+     [
+      "data",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      ""
+     ],
+     [
+      "target_patches",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      "int"
+     ],
+     [
+      "lo",
+      "POSITIONAL_OR_KEYWORD",
+      "1.0",
+      "float"
+     ],
+     [
+      "hi",
+      "POSITIONAL_OR_KEYWORD",
+      "64.0",
+      "float"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "max_probes",
+      "POSITIONAL_OR_KEYWORD",
+      "40",
+      "int"
+     ]
+    ],
+    "return": "tuple[float, int]"
+   },
+   "solve_c_for_book": {
+    "params": [
+     [
+      "data",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      ""
+     ],
+     [
+      "target_book",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      "int"
+     ],
+     [
+      "lo",
+      "POSITIONAL_OR_KEYWORD",
+      "1.0",
+      "float"
+     ],
+     [
+      "hi",
+      "POSITIONAL_OR_KEYWORD",
+      "64.0",
+      "float"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "coarse_steps",
+      "POSITIONAL_OR_KEYWORD",
+      "32",
+      "int"
+     ],
+     [
+      "max_probes",
+      "POSITIONAL_OR_KEYWORD",
+      "24",
+      "int"
+     ]
+    ],
+    "return": "tuple[float, int]"
+   }
+  },
+  "RateC": {
+   "init": {
+    "params": [
+     [
+      "self",
+      "POSITIONAL_OR_KEYWORD",
+      null,
+      ""
+     ],
+     [
+      "c",
+      "POSITIONAL_OR_KEYWORD",
+      "20",
+      "float"
+     ],
+     [
+      "store_book",
+      "POSITIONAL_OR_KEYWORD",
+      "True",
+      "bool"
+     ],
+     [
+      "pf",
+      "POSITIONAL_OR_KEYWORD",
+      "-1",
+      "int"
+     ],
+     [
+      "warm_state",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      ""
+     ],
+     [
+      "prebits",
+      "POSITIONAL_OR_KEYWORD",
+      "16",
+      "int"
+     ],
+     [
+      "map_capbits",
+      "POSITIONAL_OR_KEYWORD",
+      "22",
+      "int"
+     ],
+     [
+      "exact",
+      "POSITIONAL_OR_KEYWORD",
+      "True",
+      "bool"
+     ],
+     [
+      "carry",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "prune",
+      "POSITIONAL_OR_KEYWORD",
+      "False",
+      "bool"
+     ],
+     [
+      "prune_after",
+      "POSITIONAL_OR_KEYWORD",
+      "1048576",
+      "int"
+     ],
+     [
+      "prune_min",
+      "POSITIONAL_OR_KEYWORD",
+      "2",
+      "int"
+     ],
+     [
+      "reserve",
+      "POSITIONAL_OR_KEYWORD",
+      "None",
+      "int | None"
+     ]
+    ],
+    "return": ""
+   },
+   "methods": {
+    "counts": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "np.ndarray"
+    },
+    "decode": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "ids",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       "Sequence[int]"
+      ]
+     ],
+     "return": "str"
+    },
+    "decode_batch": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "ids_list",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       "Sequence[Sequence[int]]"
+      ],
+      [
+       "threads",
+       "POSITIONAL_OR_KEYWORD",
+       "0",
+       "int"
+      ]
+     ],
+     "return": "list[bytes]"
+    },
+    "decode_bytes": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "ids",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       "Sequence[int]"
+      ]
+     ],
+     "return": "bytes"
+    },
+    "encode": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "text",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "c",
+       "KEYWORD_ONLY",
+       "None",
+       "int | None"
+      ]
+     ],
+     "return": "list[int]"
+    },
+    "encode_batch": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "docs",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       "Sequence"
+      ],
+      [
+       "threads",
+       "POSITIONAL_OR_KEYWORD",
+       "0",
+       "int"
+      ]
+     ],
+     "return": ""
+    },
+    "encode_bytes": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "data",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "list[int]"
+    },
+    "encode_file": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "path",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "separator",
+       "KEYWORD_ONLY",
+       "b'<|endoftext|>'",
+       "bytes"
+      ],
+      [
+       "threads",
+       "KEYWORD_ONLY",
+       "0",
+       "int"
+      ],
+      [
+       "max_docs",
+       "KEYWORD_ONLY",
+       "None",
+       "int | None"
+      ]
+     ],
+     "return": ""
+    },
+    "encode_files": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "paths",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "separator",
+       "KEYWORD_ONLY",
+       "b'<|endoftext|>'",
+       "bytes"
+      ],
+      [
+       "threads",
+       "KEYWORD_ONLY",
+       "0",
+       "int"
+      ],
+      [
+       "max_docs",
+       "KEYWORD_ONLY",
+       "None",
+       "int | None"
+      ]
+     ],
+     "return": "list"
+    },
+    "encode_stream_parallel": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "data",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "chunk",
+       "POSITIONAL_OR_KEYWORD",
+       "1048576",
+       "int | None"
+      ],
+      [
+       "threads",
+       "POSITIONAL_OR_KEYWORD",
+       "0",
+       "int"
+      ],
+      [
+       "head_chunks",
+       "POSITIONAL_OR_KEYWORD",
+       "1",
+       "int"
+      ],
+      [
+       "mode",
+       "POSITIONAL_OR_KEYWORD",
+       "'runs'",
+       "str"
+      ],
+      [
+       "as_arrays",
+       "POSITIONAL_OR_KEYWORD",
+       "False",
+       "bool"
+      ],
+      [
+       "ids",
+       "POSITIONAL_OR_KEYWORD",
+       "False",
+       "bool"
+      ],
+      [
+       "intern_threads",
+       "POSITIONAL_OR_KEYWORD",
+       "None",
+       "int | None"
+      ]
+     ],
+     "return": ""
+    },
+    "encode_to_spans": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "data",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "as_arrays",
+       "POSITIONAL_OR_KEYWORD",
+       "False",
+       "bool"
+      ]
+     ],
+     "return": ""
+    },
+    "feed": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "data",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": ""
+    },
+    "flush": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": ""
+    },
+    "rehash_count": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "int"
+    },
+    "reset": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "None"
+    },
+    "save_ranks": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "path",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       "str"
+      ]
+     ],
+     "return": "int"
+    },
+    "save_state": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "path",
+       "POSITIONAL_OR_KEYWORD",
+       "None",
+       "str | None"
+      ]
+     ],
+     "return": "bytes | None"
+    },
+    "surprise": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "data",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "np.ndarray"
+    },
+    "to_ranks": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "dict[bytes, int]"
+    },
+    "validate": {
+     "params": [
+      [
+       "self",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "data",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "decode_check",
+       "KEYWORD_ONLY",
+       "True",
+       "bool"
+      ]
+     ],
+     "return": "dict"
+    }
+   },
+   "classmethods": {
+    "from_state": {
+     "params": [
+      [
+       "state",
+       "POSITIONAL_OR_KEYWORD",
+       null,
+       ""
+      ],
+      [
+       "kw",
+       "VAR_KEYWORD",
+       null,
+       ""
+      ]
+     ],
+     "return": "'RateC'"
+    }
+   },
+   "properties": [
+    "_eng",
+    "book_size",
+    "bytes_seen",
+    "c",
+    "carry",
+    "carry_mode",
+    "n_forced",
+    "n_patches",
+    "n_pruned",
+    "prune_after",
+    "prune_min"
+   ]
+  },
+  "RatecErrorCode": {
+   "TILING": "TILING",
+   "BOOKLESS": "BOOKLESS",
+   "CAP_EXHAUSTED": "CAP_EXHAUSTED",
+   "BUFFER_LIMIT": "BUFFER_LIMIT",
+   "SNAPSHOT_INVALID": "SNAPSHOT_INVALID",
+   "SNAPSHOT_VERSION": "SNAPSHOT_VERSION",
+   "ARGUMENT": "ARGUMENT",
+   "STATE": "STATE"
+  },
+  "RatecError_attrs": [
+   "add_note",
+   "args",
+   "with_traceback"
+  ],
+  "__all__": [
+   "RateC",
+   "RatecError",
+   "RatecErrorCode",
+   "patch_from_sur",
+   "batch_spans",
+   "bench",
+   "batch_encode",
+   "chunked_prep",
+   "export_tokenizer_json",
+   "export_gguf",
+   "solve_c",
+   "solve_c_for_book",
+   "__version__"
+  ]
+ },
+ "c": {
+  "functions": [
+   "Engine",
+   "RatecError",
+   "batch",
+   "load_state",
+   "patch_from_sur",
+   "version"
+  ],
+  "doc_line": "RateC tokenizer engine (C core)."
+ },
+ "meta": {
+  "__version__": "0.9.2"
+ },
+ "record": {
+  "ratec_version": "0.9.2",
+  "deps": {
+   "numpy": "2.1.3",
+   "tiktoken": "0.14.0"
+  },
+  "git_rev": "71f23865",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-23T10:37:24+00:00",
+  "inputs": {}
+ }
+}
