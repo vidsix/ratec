@@ -125,7 +125,11 @@ jobs:
           import re, sys, pathlib
           bad = []
           for f in sorted(pathlib.Path("lean").glob("*.lean")):
-              for n, line in enumerate(f.read_text().splitlines(), 1):
+              text = f.read_text()
+              text = re.sub(r"/-!.*?-/", " ", text, flags=re.S)   # module docs
+              text = re.sub(r"/--.*?-/", " ", text, flags=re.S)  # doc comments
+              text = re.sub(r"/-.*?-/", " ", text, flags=re.S)   # block comments
+              for n, line in enumerate(text.splitlines(), 1):
                   code = line.split("--")[0]        # strip line comments
                   if re.search(r"\b(sorry|admit)\b", code):
                       bad.append(f"{f}:{n}: {line.strip()}")
