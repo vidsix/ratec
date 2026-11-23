@@ -6,18 +6,18 @@
   "c": 20,
   "patch_starts_shifted": 0,
   "patch_starts_total": 41791,
-  "ratec_version": "0.9.0",
+  "ratec_version": "1.0.0rc1",
   "deps": {
    "numpy": "2.1.3"
   },
-  "git_rev": "58031be",
+  "git_rev": "ddd1751",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-22T19:31:49+00:00",
+  "created_utc": "2026-11-23T21:05:50+00:00",
   "inputs": {}
  },
  "measured_max_relative_deviation": 1.184847775448361e-07

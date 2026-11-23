@@ -4,56 +4,56 @@
    "script": "test_ratec.py",
    "exit": 0,
    "seconds": 1.74,
-   "at": "2026-11-23T20:52:32+00:00"
+   "at": "2026-11-23T21:01:25+00:00"
   },
   "test_v04.py": {
    "script": "test_v04.py",
    "exit": 0,
-   "seconds": 1.78,
-   "at": "2026-11-23T20:52:34+00:00"
+   "seconds": 1.88,
+   "at": "2026-11-23T21:01:27+00:00"
   },
   "test_profiles.py": {
    "script": "test_profiles.py",
    "exit": 0,
-   "seconds": 0.26,
-   "at": "2026-11-23T20:52:34+00:00"
+   "seconds": 0.27,
+   "at": "2026-11-23T21:01:27+00:00"
   },
   "test_smollm2_port.py": {
    "script": "test_smollm2_port.py",
    "exit": 0,
-   "seconds": 2.05,
-   "at": "2026-11-23T20:52:36+00:00"
+   "seconds": 2.01,
+   "at": "2026-11-23T21:01:29+00:00"
   },
   "test_snapfuzz.py": {
    "script": "test_snapfuzz.py",
-   "exit": 1,
-   "seconds": 317.44,
-   "at": "2026-11-22T19:31:46+00:00"
+   "exit": 0,
+   "seconds": 258.98,
+   "at": "2026-11-23T21:05:48+00:00"
   },
   "test_tables.py": {
    "script": "test_tables.py",
    "exit": 0,
-   "seconds": 0.23,
-   "at": "2026-11-22T19:31:47+00:00"
+   "seconds": 0.17,
+   "at": "2026-11-23T21:05:48+00:00"
   },
   "test_fuzz.py": {
    "script": "test_fuzz.py",
    "exit": 0,
-   "seconds": 3.81,
-   "at": "2026-11-22T19:31:51+00:00"
+   "seconds": 3.11,
+   "at": "2026-11-23T21:05:51+00:00"
   },
   "gate_bitexact.py": {
    "script": "gate_bitexact.py",
    "exit": 0,
-   "seconds": 0.78,
-   "at": "2026-11-23T20:16:36+00:00"
+   "seconds": 0.74,
+   "at": "2026-11-23T21:05:53+00:00"
   },
   "test_prune.py": {
    "script": "test_prune.py",
    "exit": 0,
-   "seconds": 0.98,
-   "at": "2026-11-22T19:31:51+00:00"
+   "seconds": 0.93,
+   "at": "2026-11-23T21:05:52+00:00"
   }
  },
- "updated_utc": "2026-11-23T20:52:36+00:00"
+ "updated_utc": "2026-11-23T21:05:53+00:00"
 }

@@ -6,17 +6,17 @@
    "tiktoken": "0.14.0",
    "transformers": "5.24.0"
   },
-  "git_rev": "2c66a81",
+  "git_rev": "ddd1751",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-23T20:48:08+00:00",
+  "created_utc": "2026-11-23T21:06:14+00:00",
   "inputs": {}
  },
- "git_rev": "2c66a81",
+ "git_rev": "ddd1751",
  "lean_toolchain": "leanprover/lean4:v4.36.0",
  "generator": "bench/provenance.py",
  "reproduce_record": "python bench/provenance.py  # re-run and diff against research/provenance_1.0.json \u2014 any changed hash is a contract-artifact change",
@@ -70,8 +70,8 @@
    "reproduce": "release procedure: full quiet-box re-record"
   },
   "research/perf_floors.json": {
-   "sha256": "434c3d7b9d9b89a7a5a568294037f9b4a0ea42497c69eaf4553e579abe96b5d5",
-   "bytes": 1876,
+   "sha256": "c760a46b8b64ff3607bf04e273435a4317c231fca745d595818b6e034dc87d8d",
+   "bytes": 1938,
    "what": "the executable floor check vs the envelope (tiered floors)",
    "reproduce": "python bench/perf_floors.py"
   },
@@ -82,8 +82,8 @@
    "reproduce": "python bench/gate_8gib.py (32 x 256 MiB engines)"
   },
   "research/fastlane_parity.json": {
-   "sha256": "57fd93d92a2225f76a112c1cf09422305c8b69b5d3f72715c4b1db281eda7b7b",
-   "bytes": 541,
+   "sha256": "f073058b81ef5494cbf6c832de22b08c75164af632a1328e3cc39a2858cc53b5",
+   "bytes": 544,
    "what": "the fast-lane surprisal-deviation bound (5e-07)",
    "reproduce": "the parity bench (research/ablate_lenfield.py)"
   },
@@ -112,8 +112,8 @@
    "reproduce": "python bench/integration_proofs.py"
   },
   "research/parallel_scaling.json": {
-   "sha256": "0287439375c8873c6b41f05fcb8eda8a7d1e8c3881f6e6d69956cc228842913a",
-   "bytes": 924,
+   "sha256": "c58dd510f63a063b885ce489118aee59d02d60b9bb6dca069fd1e2439ab44fc8",
+   "bytes": 926,
    "what": "the infrastructure-speed table (threads 1-8, prep 256 MiB)",
    "reproduce": "python bench/parallel_scaling.py"
   },
