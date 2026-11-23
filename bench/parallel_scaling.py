@@ -88,7 +88,7 @@ def main():
               f"{res['prep'][f'threads_{th}']['mb_s']} MB/s, "
               f"{res['prep'][f'threads_{th}']['mtok_s']} Mtok/s", flush=True)
 
-    res["meta"] = record_envelope(inputs={})
+    res["record"] = record_envelope(inputs={})   # the convention key
     res["note"] = "threads>1 on a 4-vCPU-class box may plateau; the " \
                   "record is host-annotated via the envelope"
     write_record(os.path.join(ROOT, "research", "parallel_scaling.json"), res)

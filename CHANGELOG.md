@@ -1,5 +1,77 @@
 # Changelog
 
+## v1.0.0rc1 — the release candidate
+
+The candidate for "the actual ratec": the freeze audit executed at the
+tag, the speed records that define the performance story, and the
+ecosystem integration proof that caught a real bug on the way in.
+
+### The freeze audit (executed, per docs/STABILITY.md)
+
+- **ZERO API drift**: `api_freeze` regenerated at 1.0.0rc1 — 9 module
+  functions, the RateC constructor + 20 methods + `from_state`, the
+  8-code taxonomy, 6 C entry points: IDENTICAL to the v0.9.3 freeze.
+  The only manifest delta is the recorded version itself.
+- **Provenance diff, fully explained**: the record now covers 22
+  artifacts (three new: `integration_proofs.json`,
+  `parallel_scaling.json`, the gigatoken record); every changed hash
+  maps to a documented rc change (the re-recorded envelope — the new
+  floor reference; the regenerated manifest; the new records).
+- The quiet-box envelope re-recorded (18.67 MB/s encode reference —
+  the -fno-math-errno win is inside it), floors gate PASS.
+
+### The speed story (measured, this build)
+
+- **-fno-math-errno** on the exact lane: value-identical by spec
+  (errno bookkeeping only), +5% on the warm encode lane (18.0 → 18.9
+  MB/s), bit-exactness gates confirm the outputs are untouched.
+- **The parallel-scaling record** (`research/parallel_scaling.json`):
+  one engine at threads 1/2/4/8 with the S6 ids-invariance asserted
+  every rep — on this 2-vCPU box the curve honestly plateaus at
+  threads=2 (+13%); the record is host-annotated. The fleet shape is
+  `chunked_prep` at threads × N processes.
+- **The gigatoken record** (`bench/bench_gigatoken.json`): 1 GiB
+  sustained — spans 7.8 MB/s / 0.465 Mtok/s serial, judge 12.17 MB/s,
+  and the NEW fleet arm: `chunked_prep` over the whole GiB with a
+  counting sink (flat RSS, 64 MiB segments) at **9.94 MB/s,
+  1.13 Mtok/s** on 2 vCPUs. The Mtok/s accounting bug (0.0) came from
+  treating `chunked_prep`'s return as a flat array — it is a list of
+  per-segment dicts; the cookbook recipe was wrong too and is fixed.
+
+### The integration proof — and the bug it caught
+
+- **`bench/integration_proofs.py` → `research/integration_proofs.json`,
+  PASS**: tokenizers.Tokenizer.from_file decodes ratec ids BYTE-EXACT
+  (the path vLLM/SGLang call); the independent pure-Python GGUF parser
+  walks the export to exact EOF, vocab == book, the embedded
+  snapshot.v8 reloads and CONTINUES BIT-EXACT. The official gguf
+  package's reader OOM-kills a 3 GiB box on our 5 MB file — the
+  repo's parser is the gate tool. transformers' own probe is
+  env-gated (RC_TRANSFORMERS_PROBE=1): its import graph exceeds this
+  sandbox's 3 GiB even as a child process; the record notes that the
+  tokenizers proof IS the code transformers wraps.
+- **THE BUG: with `decoder: null` in tokenizer.json, HF tokenizers /
+  vLLM / transformers JOIN DECODED PIECES WITH SPACES** — 200 ratec
+  ids decoded to 2065 bytes. Every model using the bridge would have
+  silently corrupted detokenization. The export now carries an
+  identity Replace decoder (never matches; the join becomes "");
+  `rt.decode(ids).encode("latin-1")` round-trips exactly. The v0.9.1
+  contract test passed through the raw JSON (which never inserts
+  spaces) — the bridge-level proof is what found it. test_v091 4/4,
+  test_gguf 2/2 confirm compatibility.
+- The GGUF continuation proof also fixed an ordering trap: the export
+  FREEZES engine state (it finalizes the open patch) — reference ids
+  must be taken AFTER the export.
+
+### Known-open for 1.0.0 (recorded honestly)
+
+- The nightly-green ≥ 1 week clock (docs/STABILITY.md checklist step
+  8) restarted at the CI repair this cycle — the rc exists precisely
+  to gather that window; CI was found RED on main (sorry-gate doc
+  mentions, a platform-marginal book bound, wheels sdist missing
+  setuptools, invalid cibuildwheel abi3 selectors) and all four are
+  fixed.
+
 ## v0.9.3 — the rc-readiness release
 
 Everything the 1.0rc gate list needs, delivered as executable artifacts

@@ -6,8 +6,8 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v0.9.3, experimental — the rc-readiness release (road to
-> v1.0.0). The C core and byte-level semantics are
+> **Status:** v1.0.0rc1 — the release candidate (the first stable
+> release of the real thing). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -533,9 +533,15 @@ paths to raw speed.
     commands), `docs/STABILITY.md` (the versioning contract written
     before the freeze), `docs/COOKBOOK.md` (ten executed recipes), and
     the wheel pipeline (`wheels.yml`: sdist + cibuildwheel
-    x86_64/aarch64 manylinux, per-wheel smoke). Remaining to 1.0rc:
-    the nightly-green week (clock running since v0.9.2) and the freeze
-    audit executed at the rc tag.
+    x86_64/aarch64 manylinux, per-wheel smoke).
+21. **v1.0.0rc1 — the release candidate (current)** — the freeze audit
+    executed at the tag with ZERO API drift; the speed story measured
+    (-fno-math-errno +5%, the parallel-scaling record, the gigatoken
+    fleet arm 9.94 MB/s / 1.13 Mtok/s on 2 vCPUs); the integration
+    proof (tokenizers decode byte-exact, GGUF continuation bit-exact)
+    which CAUGHT the decoder-join bug that would have silently
+    corrupted detokenization for every bridged model. Known-open for
+    1.0.0: the nightly-green week (clock restarted at the CI repair).
 
 
 ## Layout

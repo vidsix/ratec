@@ -34,7 +34,8 @@
    "segments": 1
   }
  },
- "meta": {
+ "note": "threads>1 on a 4-vCPU-class box may plateau; the record is host-annotated via the envelope",
+ "record": {
   "ratec_version": "0.9.3",
   "deps": {
    "numpy": "2.1.3"
@@ -48,6 +49,5 @@
   },
   "created_utc": "2026-11-23T20:18:53+00:00",
   "inputs": {}
- },
- "note": "threads>1 on a 4-vCPU-class box may plateau; the record is host-annotated via the envelope"
+ }
 }

@@ -68,6 +68,17 @@ ARTIFACTS = {
     "research/api_manifest.json": (
         "the frozen public API surface (the freeze audit's manifest)",
         "python bench/api_freeze.py + tests/test_api_freeze.py"),
+    "research/integration_proofs.json": (
+        "the ecosystem bridges vs the real packages (tokenizers decode "
+        "byte-exact, GGUF parse/continuation) — caught the decoder bug",
+        "python bench/integration_proofs.py"),
+    "research/parallel_scaling.json": (
+        "the infrastructure-speed table (threads 1-8, prep 256 MiB)",
+        "python bench/parallel_scaling.py"),
+    "bench/bench_gigatoken.json": (
+        "the sustained 1 GiB record (spans/judge serial + the "
+        "chunked_prep fleet arm, 9.94 MB/s / 1.13 Mtok/s)",
+        "python bench/bench_gigatoken.py"),
     "research/soak_2026-11-23T0941.json": (
         "the first nightly-soak record (198 rounds flat-RSS PASS)",
         "python bench/soak_nightly.py --minutes 60 (nightly)"),

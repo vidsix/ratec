@@ -35,31 +35,31 @@ state, affinity, and exactness cross-checks on all four shipped
 domains.
 
 <!-- table:quietbox generated from research/quietbox_envelope.json — do not edit; run make tables -->
-Envelope: min-of-3-round medians, round-robin interleave, 2026-11-22; provenance (loadavg, governor probe, affinity, exactness cross-checks) in the record. The 1.0 per-lane floors are RATIOS of these numbers, so a re-issue on a better host lifts the floors, never the ratios.
+Envelope: min-of-3-round medians, round-robin interleave, 2026-11-23; provenance (loadavg, governor probe, affinity, exactness cross-checks) in the record. The 1.0 per-lane floors are RATIOS of these numbers, so a re-issue on a better host lifts the floors, never the ratios.
 
 | lane (exact, 4 MiB stream) | envelope MB/s | round medians |
 |---|---:|---|
-| `RateC.encode_bytes` | 17.78 | 17.78 18.59 18.52 — sequential judge+patcher; persistent engine, book persists across reps (the `bench()` semantics) |
-| `RateC.encode_to_spans` | 18.34 | 18.35 18.40 18.34 — tuple-free `as_arrays=True`; pool engine, `reset()` per rep |
-| `encode_stream_parallel` (spans) | 22.37 | 22.37 23.97 22.44 — fresh engine per rep — the prep-pipeline cold shape |
-| `…(ids=True)` cold | 23.14 | 23.75 23.30 23.14 — fresh engine per rep — includes the cold-book intern merge |
-| `encode_stream_parallel` (spans, warm) | 23.27 | 24.13 23.99 23.27 — persistent engine, saturated book |
-| `…(ids=True)` warm | 23.13 | 23.50 23.13 23.79 — saturated book — the intern pre-probe hits |
-| `RateC.decode_bytes` | 10757.58 | 10801.93 10757.58 10802.29 — single-thread full-book read of the stream ids |
-| `RateC.decode_batch(threads=2)` | 13724.82 | 13724.82 13835.60 13958.45 — 8-way id fan |
-| `ratec.batch_encode(threads=2)` | 23.17 | 24.04 24.07 23.17 — 4 x 1 MiB docs, per-doc cold engines |
+| `RateC.encode_bytes` | 18.67 | 18.67 19.08 19.20 — sequential judge+patcher; persistent engine, book persists across reps (the `bench()` semantics) |
+| `RateC.encode_to_spans` | 18.26 | 18.28 18.26 18.28 — tuple-free `as_arrays=True`; pool engine, `reset()` per rep |
+| `encode_stream_parallel` (spans) | 14.76 | 15.97 14.76 15.16 — fresh engine per rep — the prep-pipeline cold shape |
+| `…(ids=True)` cold | 15.05 | 16.02 15.05 15.33 — fresh engine per rep — includes the cold-book intern merge |
+| `encode_stream_parallel` (spans, warm) | 15.34 | 15.97 15.34 16.68 — persistent engine, saturated book |
+| `…(ids=True)` warm | 15.29 | 15.62 15.56 15.29 — saturated book — the intern pre-probe hits |
+| `RateC.decode_bytes` | 8795.27 | 9297.82 8795.27 8812.16 — single-thread full-book read of the stream ids |
+| `RateC.decode_batch(threads=2)` | 11346.87 | 11412.95 12329.59 11346.87 — 8-way id fan |
+| `ratec.batch_encode(threads=2)` | 17.05 | 18.43 17.05 17.62 — 4 x 1 MiB docs, per-doc cold engines |
 
 | gate ratio (P1.2) | value | gate |
 |---|---:|---|
-| ids/spans cold | 103.4% | ≥ 95%: PASS |
-| ids/spans warm | 99.4% | ≥ 95%: PASS |
+| ids/spans cold | 102.0% | ≥ 95%: PASS |
+| ids/spans warm | 99.7% | ≥ 95%: PASS |
 
 | tiktoken r50k reference | envelope MB/s |
 |---|---:|
-| english | 14.10 |
-| code | 12.16 |
-| chinese | 13.62 |
-| base64 | 9.12 |
+| english | 14.34 |
+| code | 12.40 |
+| chinese | 13.59 |
+| base64 | 9.45 |
 
 The judge-parity anchor: ratec's judge core at tiktoken parity in isolation is an attribution claim (PLAN_v0.8) — these rows are the same-corpus reference the next attribution re-run starts from.
 <!-- /table:quietbox -->
