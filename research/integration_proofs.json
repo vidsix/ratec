@@ -1,0 +1,29 @@
+{
+ "tokenizers_from_file_decode_exact": true,
+ "versions": {
+  "tokenizers": "0.23.3"
+ },
+ "transformers_fast_decode_exact": null,
+ "transformers_note": "probe not run in this 3 GiB sandbox (import graph OOMs the cgroup; set RC_TRANSFORMERS_PROBE=1 on a larger runner). The tokenizers proof above IS the engine transformers wraps: PreTrainedTokenizerFast delegates to tokenizers.Tokenizer, which this record proves byte-exact",
+ "gguf_parse_exact_eof": true,
+ "gguf_vocab_equal_book": true,
+ "gguf_snapshot_continues_bit_exact": true,
+ "record": {
+  "ratec_version": "0.9.3",
+  "deps": {
+   "numpy": "2.1.3",
+   "tiktoken": "0.14.0",
+   "transformers": "5.24.0"
+  },
+  "git_rev": "a8fb5a1",
+  "host": {
+   "python": "3.12.16",
+   "machine": "x86_64",
+   "cpu_count": 2,
+   "cpu_model": "Intel(R) Xeon(R) Processor"
+  },
+  "created_utc": "2026-11-23T20:45:23+00:00",
+  "inputs": {}
+ },
+ "verdict": "PASS"
+}

@@ -30,6 +30,31 @@ def main():
     print(f"gigatoken bench: {n/1e9:.2f} GB ({n} bytes), chunk {CHUNK>>20} MiB")
 
     res = {"bytes_total": n, "chunk": CHUNK, "c": 20}
+
+    # the infrastructure arm: the ingestion-fleet pattern — chunked_prep
+    # over the whole GiB (fresh engine per 256 MiB segment, threads=2
+    # per segment), ids streamed, tokens counted across segments
+    # warm pass with a counting sink (flat RSS: nothing retained)
+    ntok = [0]; nseg = [0]
+    ratec.chunked_prep((stream[off:off + CHUNK]
+                        for off in range(0, n, CHUNK)),
+                       c=20, engine_bytes=1 << 26, threads=2, ids=True,
+                       sink=lambda sg: (ntok.__setitem__(0, ntok[0] + len(sg["ids"])),
+                                        nseg.__setitem__(0, nseg[0] + 1)))
+    t0 = time.perf_counter()
+    ratec.chunked_prep((stream[off:off + CHUNK]
+                        for off in range(0, n, CHUNK)),
+                       c=20, engine_bytes=1 << 26, threads=2, ids=True,
+                       sink=lambda sg: None)
+    dt = time.perf_counter() - t0
+    res["chunked_prep_fleet"] = {
+        "mb_s": round(n / dt / 1e6, 2),
+        "mtok_s": round(ntok[0] / dt / 1e6, 2),
+        "segments": nseg[0], "tokens": ntok[0],
+    }
+    print(f"chunked_prep fleet (threads=2): {res['chunked_prep_fleet']['mb_s']} MB/s, "
+          f"{res['chunked_prep_fleet']['mtok_s']} Mtok/s, {nseg[0]} segments")
+
     for arm in ("spans_book", "judge_only"):
         e = ratec.RateC(c=20, store_book=(arm == "spans_book"))
         t0 = time.perf_counter()

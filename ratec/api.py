@@ -1089,7 +1089,16 @@ def export_tokenizer_json(engine, path=None, pretty: bool = True):
         "normalizer": None,
         "pre_tokenizer": None,
         "post_processor": None,
-        "decoder": None,
+        # the identity Replace decoder is load-bearing: with
+        # `decoder: null`, tokenizers/transformers/vLLM joins pieces
+        # with spaces on decode and the byte-exact contract breaks
+        # (an rc integration proof caught this: 200 ids decoded to
+        # 2065 bytes). A never-matching Replace keeps every piece
+        # verbatim and switches the join to "" — decode(ids) then
+        # latin-1-encodes back to the exact source bytes.
+        "decoder": {"type": "Replace",
+                    "pattern": {"String": "\u0000"},
+                    "content": ""},
         "added_tokens": [],
         "model": {
             "type": "WordLevel",
