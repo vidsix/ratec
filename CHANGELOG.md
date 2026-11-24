@@ -1,5 +1,55 @@
 # Changelog
 
+## v1.0.0rc3 — the standardization candidate
+
+The rc that makes ratec FEEL like the most popular BPE tokenizers —
+as easy to pick up as tiktoken, installable straight from GitHub, and
+documented end to end.
+
+### The tiktoken-grade front door (additive surface)
+
+- `ratec.get_ratec(c=20, pf=-1, store_book=True, cache=True)` — the
+  `get_encoding` analogue: one call, one working tokenizer, cached per
+  config. The cached engine is SHARED and adaptive (right for infra
+  serving one model); `cache=False` for a private engine.
+- `ratec.load(source, cache=True)` — the infra one-liner: any saved
+  state from bytes, a path, or an http(s)/file URL. URL fetches land
+  in `RATEC_CACHE` (else `XDG_CACHE_HOME/ratec`, else
+  `~/.cache/ratec`); loads are memoized in-process keyed by
+  (source, size, mtime) so per-request `load()` does not re-read.
+  Continues bit-exactly — same invariant as `from_state`.
+- `RateC.train(text_or_bytes)` — the explicit one-time bulk-adapt call
+  (encode IS the adaptation; `train` is the clear name for the one big
+  pass before decode-exact use). Returns self.
+- `RateC.n_vocab` — the tiktoken-facing name for the adaptive book
+  size (0 on a cold engine; pinned by save_state).
+
+All four are ADDITIVE: the frozen core (byte semantics, snapshot v8,
+the exact lane) is untouched, the manifest records the new surface
+(21 methods / 1 classmethod / 11 functions), and `tests/test_ergonomics.py`
+arrives the way a tiktoken user would — train, encode/decode, unicode
+round-trips, save/load continuation, URL fetch — all passing.
+
+### Install straight from GitHub — verified
+
+`pip install git+https://github.com/vidsix/ratec@v1.0.0rc2` was
+executed in a CLEAN venv this session: build, install, and the
+encode/decode smoke all pass. README documents all three install
+paths (git+https, release wheels with the real asset URLs, clone),
+and the new `docs/QUICKSTART.md` walks the first ten minutes:
+install, the tiktoken-shaped flow, reproducible config via
+`solve_c`, the engine bridges (HF / vLLM / SGLang / llama.cpp), and
+the LM data-prep lane.
+
+### The project, cleaned
+
+The nine historical release notes moved from the repo root to
+`docs/releases/` (no references broken — nothing referenced them).
+README opens with the quickstart and the one conceptual difference
+from BPE (a ratec engine is a state, not a static table). The day-1
+engine matrix and the base64 snapshot recipe from rc2 carry over
+unchanged.
+
 ## v1.0.0rc2 — the day-1 support candidate
 
 The rc that makes ratec models loadable by the STANDARD tooling on

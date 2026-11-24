@@ -1,90 +1,88 @@
 {
  "record": {
-  "ratec_version": "1.0.0rc2",
+  "ratec_version": "1.0.0rc3",
   "deps": {
-   "numpy": "2.1.3",
-   "tiktoken": "0.14.0",
-   "transformers": "5.24.0"
+   "numpy": "2.1.3"
   },
-  "git_rev": "31ffe66",
+  "git_rev": "8e7b482",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-23T22:36:05+00:00",
+  "created_utc": "2026-11-24T09:29:19+00:00",
   "inputs": {}
  },
  "floor_rule": "tiered by envelope-median duration: >= 10 ms -> 0.90, sub-millisecond -> 0.70 (fixed call-overhead class)",
  "protocol_note": "reduced tripwire (2 rounds x 3 reps, min of round medians) vs the full quiet-box envelope; releases re-record the envelope itself",
  "lanes": {
   "encode_bytes_warm": {
-   "now_mb_s": 18.514,
+   "now_mb_s": 19.401,
    "envelope_mb_s": 18.667,
-   "ratio": 0.9918,
+   "ratio": 1.0394,
    "floor": 0.9,
    "pass": true
   },
   "spans_arrays": {
-   "now_mb_s": 18.115,
+   "now_mb_s": 18.252,
    "envelope_mb_s": 18.255,
-   "ratio": 0.9923,
+   "ratio": 0.9998,
    "floor": 0.9,
    "pass": true
   },
   "stream_spans_cold": {
-   "now_mb_s": 22.127,
+   "now_mb_s": 16.86,
    "envelope_mb_s": 14.757,
-   "ratio": 1.4994,
+   "ratio": 1.1425,
    "floor": 0.9,
    "pass": true
   },
   "stream_ids_cold": {
-   "now_mb_s": 22.062,
+   "now_mb_s": 17.895,
    "envelope_mb_s": 15.046,
-   "ratio": 1.4663,
+   "ratio": 1.1894,
    "floor": 0.9,
    "pass": true
   },
   "stream_spans_warm": {
-   "now_mb_s": 22.793,
+   "now_mb_s": 17.445,
    "envelope_mb_s": 15.343,
-   "ratio": 1.4855,
+   "ratio": 1.137,
    "floor": 0.9,
    "pass": true
   },
   "stream_ids_warm": {
-   "now_mb_s": 23.627,
+   "now_mb_s": 17.635,
    "envelope_mb_s": 15.291,
-   "ratio": 1.5451,
+   "ratio": 1.1533,
    "floor": 0.9,
    "pass": true
   },
   "decode_bytes": {
-   "now_mb_s": 11228.377,
+   "now_mb_s": 9256.027,
    "envelope_mb_s": 8795.266,
-   "ratio": 1.2766,
+   "ratio": 1.0524,
    "floor": 0.7,
    "pass": true
   },
   "decode_batch": {
-   "now_mb_s": 14791.436,
+   "now_mb_s": 13770.237,
    "envelope_mb_s": 11346.874,
-   "ratio": 1.3036,
+   "ratio": 1.2136,
    "floor": 0.7,
    "pass": true
   },
   "batch_encode": {
-   "now_mb_s": 26.408,
+   "now_mb_s": 19.728,
    "envelope_mb_s": 17.053,
-   "ratio": 1.5486,
+   "ratio": 1.1568,
    "floor": 0.9,
    "pass": true
   }
  },
- "worst_lane": "encode_bytes_warm",
- "worst_headroom": 1.102,
+ "worst_lane": "spans_arrays",
+ "worst_headroom": 1.1109,
  "worst_floor": 0.9,
  "verdict": "PASS"
 }

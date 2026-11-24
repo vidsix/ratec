@@ -172,6 +172,15 @@ class RateC:
     def decode(self, ids: Sequence[int]) -> str:
         return self.decode_bytes(ids).decode("utf-8")
 
+    def train(self, text_or_bytes) -> "RateC":
+        """Bulk-adapt on a corpus — the explicit one-time step before
+        decode-exact use (the ratec analogue of a tokenizer's training
+        run: encode IS the adaptation, so `train(corpus)` is the clear
+        name for the one big pass; afterwards encode/decode are the
+        everyday calls). Returns self for chaining."""
+        self._enc(_as_bytes(text_or_bytes))
+        return self
+
     def decode_bytes(self, ids: Sequence[int]) -> bytes:
         """ids -> bytes. numpy uint32 arrays (and other buffer objects) go
         through the engine's buffer-protocol fast path (no per-id boxing;
@@ -604,6 +613,15 @@ class RateC:
 
     @property
     def book_size(self) -> int:
+        return self._eng.book_size
+
+    @property
+    def n_vocab(self) -> int:
+        """The vocabulary size (the tiktoken-facing name for book_size).
+
+        RateC's vocabulary is ADAPTIVE: 0 on a cold engine, growing as
+        the book builds — pin it with save_state/export, don't assume a
+        static number across encodes."""
         return self._eng.book_size
 
     @property
@@ -1127,6 +1145,89 @@ def export_tokenizer_json(engine, path=None, pretty: bool = True):
             f.write(s)
     return s
 
+
+# ------------------------------------------------- tiktoken-grade front door
+_GET_CACHE: dict = {}
+
+
+def get_ratec(c: float = 20, store_book: bool = True, pf: int = -1,
+              cache: bool = True) -> "RateC":
+    """The `tiktoken.get_encoding` analogue: one call, one working tokenizer.
+
+    Returns a RateC engine for the given configuration, CACHED per
+    config key when cache=True — repeat calls return the SAME engine
+    (ratec engines are adaptive and mutable, so a cached engine is a
+    shared adaptive instance: right for infra serving one model, wrong
+    when two callers must not see each other's adaptation — pass
+    cache=False for a private engine). Encode works immediately; call
+    train(corpus) once to enable byte-exact decode; load(saved) pins a
+    trained state instead of adapting from cold.
+    """
+    key = ("ratec", float(c), bool(store_book), int(pf))
+    if not cache:
+        return RateC(c=c, store_book=store_book, pf=pf)
+    eng = _GET_CACHE.get(key)
+    if eng is None:
+        eng = RateC(c=c, store_book=store_book, pf=pf)
+        _GET_CACHE[key] = eng
+    return eng
+
+
+def load(source, *, cache: bool = True, **kw) -> "RateC":
+    """Load ANY ratec model state in one call — the infra one-liner.
+
+    `source` is one of:
+      bytes/bytearray  a save_state() payload (the RCZ1 container) or a
+                       raw snapshot — continues bit-exactly (from_state)
+      str path         a file holding such a payload
+      str url          http(s):// — fetched once into the ratec cache
+                       dir (RATEC_CACHE, else XDG_CACHE_HOME/ratec,
+                       else ~/.cache/ratec) and loaded from there
+
+    cache=True also memoizes the loaded engine in-process keyed by
+    (source, size, mtime) so infra can call load() per request without
+    re-reading. GGUF files are NOT this function's job — their snapshot
+    rides base64 inside the GGUF container; decode it per the recipe in
+    docs/vllm_recipe.md, then hand the raw snapshot bytes here.
+
+    Extra keyword arguments go to RateC(warm_state=...) (e.g. pf).
+    """
+    if isinstance(source, (bytes, bytearray)):
+        payload = bytes(source)
+        key = None
+    elif isinstance(source, str):
+        import os as _os
+        if source.startswith("file://"):
+            source = _os.path.normpath(source[len("file://"):])
+        if source.startswith(("http://", "https://")):
+            import hashlib as _h
+            import os as _os
+            base = (_os.environ.get("RATEC_CACHE")
+                    or _os.path.join(_os.environ.get("XDG_CACHE_HOME",
+                                    _os.path.expanduser("~/.cache")),
+                                    "ratec"))
+            _os.makedirs(base, exist_ok=True)
+            url = _os.path.join(
+                base, _h.sha256(source.encode("utf-8")).hexdigest())
+            if not _os.path.exists(url):
+                import urllib.request as _u
+                tmp = url + ".part"
+                _u.urlretrieve(source, tmp)
+                _os.replace(tmp, url)
+            source = url
+        st = _os.stat(source)
+        key = ("load", source, st.st_size, st.st_mtime_ns)
+        if cache and key in _GET_CACHE:
+            return _GET_CACHE[key]
+        with open(source, "rb") as f:
+            payload = f.read()
+    else:
+        raise TypeError(
+            "load(source): source must be bytes, a path, or an http(s) URL")
+    eng = RateC(warm_state=payload, **kw)
+    if cache and key is not None:
+        _GET_CACHE[key] = eng
+    return eng
 
 # ------------------------------------------------------------------ bench
 def bench(n: int = 4 << 20, c: int = 20, threads: int = 2, rounds: int = 3):

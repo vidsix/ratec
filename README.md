@@ -6,8 +6,9 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v1.0.0rc2 — the day-1 support candidate (the standard
-> tooling loads ratec models; road to 1.0.0). The C core and byte-level semantics are
+> **Status:** v1.0.0rc3 — the standardization candidate (as easy as
+> tiktoken, installable straight from GitHub, fully documented; road to
+> 1.0.0). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -20,15 +21,37 @@ algorithm, it adapts as it reads, and any C works at any time.
 > external gate (tiling/parity/carry/fractional-C monotonicity) passes
 > on foreign boxes, and the base64 fertility number replicates exactly.
 
-```
-pip install .            # from source: C extension, gcc >= 9, any 64-bit
+```bash
+# straight from GitHub — builds the C extension (gcc >= 9, any 64-bit):
+pip install git+https://github.com/vidsix/ratec@v1.0.0rc3
+#   or the tip of main:  pip install git+https://github.com/vidsix/ratec
 
-# OR the release wheels (no compiler needed — infra, day 1):
-#   pip install https://github.com/vidsix/ratec/releases/download/v1.0.0rc1/ratec-1.0.0rc1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-#   (cp39/cp310/cp311/cp312 x cp312 x aarch64 manylinux2014 wheels on the release;
-#    swap the URL for your interpreter/arch)
-make test                # or: python -m pytest tests/  (conftest builds in place)
+# OR the release wheels — no compiler needed (infra, day 1):
+#   cp39-cp312 x x86_64/aarch64 manylinux2014, auto-attached at
+#   https://github.com/vidsix/ratec/releases — e.g.:
+pip install https://github.com/vidsix/ratec/releases/download/v1.0.0rc3/ratec-1.0.0rc3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+
+# from a clone (also how the tests run — conftest builds in place):
+git clone https://github.com/vidsix/ratec && cd ratec && make test
 ```
+
+## Quickstart — as easy as tiktoken
+
+```python
+import ratec
+tok = ratec.get_ratec(c=20)        # one call, cached per config
+tok.train(corpus)                  # one bulk pass; encode IS the adaptation
+ids = tok.encode("hello world")    # str -> list[int]
+tok.decode(ids)                    # -> "hello world"
+tok.n_vocab                        # the adaptive book size
+ratec.load("my-model.ratec")       # path | bytes | URL — continues bit-exact
+```
+
+The one conceptual difference from a BPE tokenizer: **ratec adapts on
+every encode** — a ratec engine is a state, not a static table; pin it
+with `save_state()`. First ten minutes, the bridges to
+HF transformers / vLLM / SGLang / llama.cpp and the LM data-prep lane:
+[docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 Tests run anywhere: the scored spans, reference surprisal/starts, the
 v4-continuation slices, the u8_image raster and the snapshot-training corpus

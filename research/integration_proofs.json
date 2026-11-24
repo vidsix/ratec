@@ -11,20 +11,18 @@
  "gguf_vocab_equal_book": true,
  "gguf_snapshot_continues_bit_exact": true,
  "record": {
-  "ratec_version": "1.0.0rc2",
+  "ratec_version": "1.0.0rc3",
   "deps": {
-   "numpy": "2.1.3",
-   "tiktoken": "0.14.0",
-   "transformers": "5.24.0"
+   "numpy": "2.1.3"
   },
-  "git_rev": "31ffe66",
+  "git_rev": "8e7b482",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-23T22:36:07+00:00",
+  "created_utc": "2026-11-24T09:30:52+00:00",
   "inputs": {}
  },
  "verdict": "PASS"
