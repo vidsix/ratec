@@ -6,9 +6,9 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v1.0.0rc3 — the standardization candidate (as easy as
-> tiktoken, installable straight from GitHub, fully documented; road to
-> 1.0.0). The C core and byte-level semantics are
+> **Status:** v1.0.0rc4 — the release-prep candidate (the go/no-go
+> for 1.0.0 is now ONE machine-checkable command: bench/release_gate.py
+> runs the full docs/STABILITY.md 8-point audit; road to 1.0.0). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -23,13 +23,13 @@ algorithm, it adapts as it reads, and any C works at any time.
 
 ```bash
 # straight from GitHub — builds the C extension (gcc >= 9, any 64-bit):
-pip install git+https://github.com/vidsix/ratec@v1.0.0rc3
+pip install git+https://github.com/vidsix/ratec@v1.0.0rc4
 #   or the tip of main:  pip install git+https://github.com/vidsix/ratec
 
 # OR the release wheels — no compiler needed (infra, day 1):
 #   cp39-cp312 x x86_64/aarch64 manylinux2014, auto-attached at
 #   https://github.com/vidsix/ratec/releases — e.g.:
-pip install https://github.com/vidsix/ratec/releases/download/v1.0.0rc3/ratec-1.0.0rc3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pip install https://github.com/vidsix/ratec/releases/download/v1.0.0rc4/ratec-1.0.0rc4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 
 # from a clone (also how the tests run — conftest builds in place):
 git clone https://github.com/vidsix/ratec && cd ratec && make test
@@ -562,7 +562,7 @@ paths to raw speed.
     before the freeze), `docs/COOKBOOK.md` (ten executed recipes), and
     the wheel pipeline (`wheels.yml`: sdist + cibuildwheel
     x86_64/aarch64 manylinux, per-wheel smoke).
-21. **v1.0.0rc1 — the release candidate (current)** — the freeze audit
+21. **v1.0.0rc1 — the release candidate** — the freeze audit
     executed at the tag with ZERO API drift; the speed story measured
     (-fno-math-errno +5%, the parallel-scaling record, the gigatoken
     fleet arm 9.94 MB/s / 1.13 Mtok/s on 2 vCPUs); the integration
@@ -570,6 +570,20 @@ paths to raw speed.
     which CAUGHT the decoder-join bug that would have silently
     corrupted detokenization for every bridged model. Known-open for
     1.0.0: the nightly-green week (clock restarted at the CI repair).
+22. **v1.0.0rc2 — the day-1 support candidate** — the gguf-py OOM
+    root-caused (per-element recursion; the snapshot now rides as ONE
+    base64 string, byte-exact, sha256-bound); the official gguf package
+    loads the 13 MB export under 2 GiB; the day-1 engine matrix
+    (HF transformers / vLLM / SGLang / llama.cpp / plain tokenizers)
+    and release-wheel install commands. First fully hands-off tag:
+    wheels built, smoked, and auto-attached themselves.
+23. **v1.0.0rc3 — the standardization candidate** — the tiktoken-grade
+    front door (additive): `get_ratec` (cached per config),
+    `load` (bytes | path | URL, memoized, bit-exact continuation),
+    `train`, `n_vocab`; `pip install git+https://…@rc` verified in a
+    clean venv; `docs/QUICKSTART.md`; release notes archived to
+    `docs/releases/`; the manifest records 21 methods / 1 classmethod
+    / 11 functions.
 
 
 ## Layout

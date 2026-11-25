@@ -47,7 +47,7 @@ package is installed, load the file through
 tokenizer layer takes (skipped when the package is absent; the JSON
 contract is the required half).
 
-## The day-1 engine matrix (rc2)
+## The day-1 engine matrix
 
 | engine | support | path |
 | --- | --- | --- |
