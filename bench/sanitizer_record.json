@@ -1,0 +1,37 @@
+{
+  "go": true,
+  "head": "77a3b0641f1041ab9459d0af609052013a78c3d5",
+  "engine_src_sha256": "c050d17e9c4c23798e83b9fbe586789487f722a70d6cd5f8f84cfc32b8048752",
+  "criteria": [
+    {
+      "name": "A instrumented build",
+      "pass": true,
+      "evidence": "build exit 0; asan/ubsan linked: 2 libs"
+    },
+    {
+      "name": "B full pytest under ASan/UBSan",
+      "pass": true,
+      "evidence": "pytest exit 0; asan_errors=0 ubsan_errors=0; tail 74 passed, 1 warning in 934.19s (0:15:34)"
+    },
+    {
+      "name": "C integration proofs under ASan/UBSan",
+      "pass": true,
+      "evidence": "verdict PASS; asan_errors=0 ubsan_errors=0"
+    },
+    {
+      "name": "D differential-leak torture",
+      "pass": true,
+      "evidence": "leaked bytes at cycles 1/30/60: 756177/756177/756177 (slack 189044); rss peak/tail per scale: {1: ('973', '64', '973'), 30: ('1009', '498', '969'), 60: ('1007', '478', '971')}"
+    },
+    {
+      "name": "E mutant blitz (15k) under ASan/UBSan",
+      "pass": true,
+      "evidence": "exit 0; asan=0 ubsan=0; FUZZBLITZ n=15000 loaded=2857 clean_error=12143 crashed=0"
+    },
+    {
+      "name": "F gcc -fanalyzer static pass (report-only)",
+      "pass": true,
+      "evidence": "exit 0; 0 analyzer warnings (informative, not gating)"
+    }
+  ]
+}

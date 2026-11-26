@@ -1,20 +1,20 @@
 {
  "record": {
-  "ratec_version": "1.0.0rc4",
+  "ratec_version": "1.0.0",
   "deps": {
    "numpy": "2.1.3"
   },
-  "git_rev": "d5f3378",
+  "git_rev": "77a3b06",
   "host": {
    "python": "3.12.16",
    "machine": "x86_64",
    "cpu_count": 2,
    "cpu_model": "Intel(R) Xeon(R) Processor"
   },
-  "created_utc": "2026-11-25T11:13:59+00:00",
+  "created_utc": "2026-11-26T09:09:20+00:00",
   "inputs": {}
  },
- "git_rev": "d5f3378",
+ "git_rev": "77a3b06",
  "lean_toolchain": "leanprover/lean4:v4.36.0",
  "generator": "bench/provenance.py",
  "reproduce_record": "python bench/provenance.py  # re-run and diff against research/provenance_1.0.json \u2014 any changed hash is a contract-artifact change",
@@ -68,8 +68,8 @@
    "reproduce": "release procedure: full quiet-box re-record"
   },
   "research/perf_floors.json": {
-   "sha256": "f5118591deb4d03a97fbc1e3597d18f3a151b69efe24df1c2cd6ccb2c377eb6f",
-   "bytes": 1881,
+   "sha256": "e764da110781e609b291148d2015c14809ca17abd4c343e2723a31bc5d6278a4",
+   "bytes": 1887,
    "what": "the executable floor check vs the envelope (tiered floors)",
    "reproduce": "python bench/perf_floors.py"
   },
@@ -80,7 +80,7 @@
    "reproduce": "python bench/gate_8gib.py (32 x 256 MiB engines)"
   },
   "research/fastlane_parity.json": {
-   "sha256": "0f6ff5fcb3e91406edd4134d97a22ebe23ea8eff9a6ff68adf6f1fe11a93a757",
+   "sha256": "5cef54b37e7b6c184ef021c2a7c95ebe8b21e5117165d221d392451e81c4f0d4",
    "bytes": 544,
    "what": "the fast-lane surprisal-deviation bound (5e-07)",
    "reproduce": "the parity bench (research/ablate_lenfield.py)"
@@ -98,13 +98,13 @@
    "reproduce": "python bench/perorder_gate.py"
   },
   "research/api_manifest.json": {
-   "sha256": "c8abf2b96a14836cd2231e13dccb910426611447fea26648358b02cc87d37043",
-   "bytes": 14810,
+   "sha256": "82ea5693e51b03b094707a406940ce921c32d2841297479f4b9c72eb4be2d398",
+   "bytes": 14804,
    "what": "the frozen public API surface (the freeze audit's manifest)",
    "reproduce": "python bench/api_freeze.py + tests/test_api_freeze.py"
   },
   "research/integration_proofs.json": {
-   "sha256": "777869d207e503bba6e59e563f6b5641fd3e36fea5b601793cc268b897fe14e3",
+   "sha256": "6d6f67e140c156f47875b795b7e2a5738b5631a3a63285b24f6af501d6464e7c",
    "bytes": 935,
    "what": "the ecosystem bridges vs the real packages (tokenizers decode byte-exact, GGUF parse/continuation) \u2014 caught the decoder bug",
    "reproduce": "python bench/integration_proofs.py"
