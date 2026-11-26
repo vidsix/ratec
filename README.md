@@ -6,9 +6,10 @@ patcher)** that cuts patches at a fixed C-bit budget. There is **no training
 data, no vocabulary file, no regex pre-tokenizer**: the model is the
 algorithm, it adapts as it reads, and any C works at any time.
 
-> **Status:** v1.0.0rc4 — the release-prep candidate (the go/no-go
-> for 1.0.0 is now ONE machine-checkable command: bench/release_gate.py
-> runs the full docs/STABILITY.md 8-point audit; road to 1.0.0). The C core and byte-level semantics are
+> **Status:** v1.0.0 — released 2026-11-26; the ship evidence is the
+> mechanical 8-point audit (bench/release_gate.py, GO) plus the
+> memory-safety proof at the tag (bench/sanitizer_gate.py, SAN-GO)
+> under criterion 8 as amended (docs/PROOF_STATUS.md). The C core and byte-level semantics are
 > stable and bit-exact gate-verified; the snapshot load path is hardened
 > and fuzz-gated (≥1000 mutants/run); published numbers regenerate from
 > committed records (`make tables`) and the performance contract lives in
@@ -23,13 +24,13 @@ algorithm, it adapts as it reads, and any C works at any time.
 
 ```bash
 # straight from GitHub — builds the C extension (gcc >= 9, any 64-bit):
-pip install git+https://github.com/vidsix/ratec@v1.0.0rc4
+pip install git+https://github.com/vidsix/ratec@v1.0.0
 #   or the tip of main:  pip install git+https://github.com/vidsix/ratec
 
 # OR the release wheels — no compiler needed (infra, day 1):
 #   cp39-cp312 x x86_64/aarch64 manylinux2014, auto-attached at
 #   https://github.com/vidsix/ratec/releases — e.g.:
-pip install https://github.com/vidsix/ratec/releases/download/v1.0.0rc4/ratec-1.0.0rc4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pip install https://github.com/vidsix/ratec/releases/download/v1.0.0/ratec-1.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 
 # from a clone (also how the tests run — conftest builds in place):
 git clone https://github.com/vidsix/ratec && cd ratec && make test

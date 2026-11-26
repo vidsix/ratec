@@ -32,6 +32,7 @@ usage:
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -182,9 +183,16 @@ def main(argv=None):
     print(f"\nVERDICT: {'SAN-GO' if go else 'SAN-NO-GO'} — memory safety "
           f"{'proven on every executed path' if go else 'NOT proven; fix above'}")
     if args.json:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                              capture_output=True, text=True).stdout.strip()
+        src = ROOT / "ratec" / "_rcengine.c"
+        src_sha = (hashlib.sha256(src.read_bytes()).hexdigest()
+                   if src.exists() else None)
         Path(args.json).write_text(json.dumps(
-            {"go": go, "criteria": results}, indent=2))
-        print(f"record written: {args.json}")
+            {"go": go, "head": head, "engine_src_sha256": src_sha,
+             "criteria": results}, indent=2))
+        print(f"record written: {args.json} "
+              f"(head {head[:7]}, engine-src sha {str(src_sha)[:12]}…)")
     return 0 if go else 1
 
 

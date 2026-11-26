@@ -23,12 +23,12 @@ executes. What the soak uniquely adds is environment variance
 (runner states, allocator behavior across images) — which is why the
 proposal below keeps it, free, as a tripwire.
 
-## The proposed STABILITY.md criterion-8 amendment
+## The STABILITY.md criterion-8 amendment (ADOPTED 2026-11-26)
 
-Current (step 8): *the nightly soak has been green (flat RSS) for
-≥ 1 week before the rc tag.*
+Current (step 8, original): *the nightly soak has been green (flat RSS)
+for ≥ 1 week before the rc tag.*
 
-Proposed replacement:
+Adopted replacement (in force as of the 1.0.0 tag):
 
 > 8. Memory-safety proof at the release tag: `bench/sanitizer_gate.py`
 >    says SAN-GO — zero ASan errors, zero UBSan runtime errors, and

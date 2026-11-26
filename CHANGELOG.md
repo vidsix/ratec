@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.0 — the proof-gated release
+
+Shipped under the amended criterion 8: the memory-safety proof gate
+(`bench/sanitizer_gate.py` — ASan+UBSan over the full 74-test suite,
+the integration proofs, the 3-scale differential-leak torture, the
+15k-mutant blitz) says SAN-GO at the tag; the nightly soak remains
+scheduled as a tripwire. The four-layer claim stack (LEAN spec
+theorems, golden bit-exact equivalence, sanitizer per-path proof,
+static analysis) is documented in docs/PROOF_STATUS.md; the executed
+gates are in release_notes_v1.0.0.md.
+
 ## v1.0.0rc4 — the release-prep candidate
 
 The rc that turns the 1.0.0 go/no-go into ONE machine-checkable

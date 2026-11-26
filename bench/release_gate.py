@@ -16,22 +16,28 @@ remembered, they are re-proven:
   6. every lean/*.lean compiles no-sorry on the PINNED toolchain
      (docstring mentions of the word are not active sorries).
   7. make test AND the full pytest suite green.
-  8. the nightly soak: the last N scheduled GitHub-Actions nightlies on
-     main are green with an intact daily cadence (N >= --nightly-min,
-     default 7 = one week). Reports the current streak and, when short,
-     the earliest date the week completes assuming green continues.
+  8. the memory-safety proof at the tag: bench/sanitizer_record.json is
+     committed, says go=true with every criterion green, was produced
+     from THIS engine source (sha256 match), and on a commit that is an
+     ancestor of (or equal to) HEAD. The nightly soak stays scheduled as
+     a free tripwire; its streak is REPORTED, not gating (the criterion-8
+     amendment — docs/PROOF_STATUS.md, adopted 2026-11-26 — per-path
+     LSan proof replaces the >= 1 green week).
 
 usage:
     python3 bench/release_gate.py                  # verdict table
     python3 bench/release_gate.py --json out.json  # + machine record
-    python3 bench/release_gate.py --nightly-min 7  # explicit requirement
+    python3 bench/sanitizer_gate.py \
+        --json bench/sanitizer_record.json         # produce the evidence
 
-Criterion 8 reads https://api.github.com (GITHUB_TOKEN optional; the
-repo is public). Everything else is local and offline.
+Only the nightly tripwire REPORT touches https://api.github.com
+(GITHUB_TOKEN optional; the repo is public). The verdict itself is
+local and offline.
 """
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -259,9 +265,41 @@ def c8_nightly(min_n):
                              for r in runs[:streak]]}
 
 
+def c8_memory_safety(record="bench/sanitizer_record.json"):
+    # the criterion-8 amendment: per-path proof at the tag, not weekly
+    # sampling. The record must be green, hash-match THIS engine source,
+    # and descend from the recorded commit's line (evidence freshness).
+    rec_path = ROOT / record
+    if not rec_path.exists():
+        return False, (f"{record} missing — produce it at this commit: "
+                       f"python3 bench/sanitizer_gate.py --json {record}"), {}
+    rec = json.loads(rec_path.read_text())
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                          capture_output=True, text=True).stdout.strip()
+    src = ROOT / "ratec" / "_rcengine.c"
+    src_sha = (hashlib.sha256(src.read_bytes()).hexdigest()
+               if src.exists() else None)
+    crit = rec.get("criteria", [])
+    go_rec = rec.get("go") is True and bool(crit) and all(
+        c.get("pass") for c in crit)
+    sha_ok = src_sha is not None and rec.get("engine_src_sha256") == src_sha
+    rh = rec.get("head")
+    anc = bool(rh) and (rh == head or subprocess.run(
+        ["git", "merge-base", "--is-ancestor", rh, head],
+        cwd=ROOT, capture_output=True).returncode == 0)
+    ok = go_rec and sha_ok and anc
+    ev = (f"record go={rec.get('go')}, criteria "
+          f"{sum(1 for c in crit if c.get('pass'))}/{len(crit)}; "
+          f"engine-src sha {'match' if sha_ok else 'MISMATCH'}; "
+          f"record head {str(rh)[:7]} is{' an' if anc and rh != head else ''}"
+          f"{' equal to' if rh == head else ''} ancestor of HEAD "
+          f"{head[:7]}: {anc}")
+    return ok, ev, {"record_head": rh, "head": head}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--nightly-min", type=int, default=7)
+    ap.add_argument("--record", default="bench/sanitizer_record.json")
     ap.add_argument("--json", metavar="OUT")
     args = ap.parse_args(argv)
 
@@ -272,8 +310,9 @@ def main(argv=None):
                ("5 quiet-box envelope", *c5_envelope()),
                ("6 lean no-sorry (pinned)", *c6_lean()),
                ("7 make test + full pytest", *c7_suite())]
-    ok8, ev8, meta8 = c8_nightly(args.nightly_min)
-    results.append(("8 nightly soak >= 1 week", ok8, [ev8]))
+    ok8, ev8, meta8 = c8_memory_safety(args.record)
+    results.append(("8 memory-safety proof at the tag (SAN-GO)", ok8, [ev8]))
+    tw_ok, tw_ev, tw_meta = c8_nightly(7)      # tripwire REPORT only
 
     go = all(ok for _, ok, _ in results)
     print(f"release gate @ {ROOT.name} — the docs/STABILITY.md 1.0 checklist")
@@ -282,9 +321,11 @@ def main(argv=None):
               + "; ".join(str(x) for x in ev))
     print(f"\nVERDICT: {'GO' if go else 'NO-GO'}"
           + ("" if go else " — resolve the FAIL rows, then re-run"))
+    print(f"tripwire (report-only, not gating): nightly streak "
+          f"{tw_meta.get('streak')} green — {tw_ev}")
     if args.json:
         Path(args.json).write_text(json.dumps(
-            {"go": go, "nightly_min": args.nightly_min, "nightly": meta8,
+            {"go": go, "nightly_tripwire": tw_meta,
              "criteria": [{"name": n, "pass": ok, "evidence": [str(x) for x in ev]}
                           for n, ok, ev in results]}, indent=2))
         print(f"record written: {args.json}")

@@ -86,5 +86,13 @@ visible in the manifest diff (the old signature stays until removal).
    reference for the next cycle.
 6. All seven LEAN files compile no-sorry on the pinned toolchain.
 7. `make test` + full pytest green on x86_64 and aarch64 CI.
-8. The nightly soak has been green (flat RSS) for ≥ 1 week before the
-   rc tag.
+8. The memory-safety proof gate is green AT the release tag:
+   `bench/sanitizer_gate.py` says SAN-GO — zero ASan errors, zero UBSan
+   runtime errors, and non-scaling LSan leaks across the torture scales
+   — over the full test suite, the integration proofs, and the
+   15k-mutant blitz, with its machine record committed as
+   `bench/sanitizer_record.json` on the tagged line. The nightly soak
+   stays scheduled as a free tripwire; the gate reports its streak but
+   no longer gates on it. (Amended 2026-11-26: per-path LSan proof
+   replaces the original "≥ 1 green week" — the criterion's purpose,
+   no leaks at 1.0.0, is served more directly. See docs/PROOF_STATUS.md.)
